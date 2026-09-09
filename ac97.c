@@ -1,3 +1,5 @@
+//AC97 sound cards driver
+
 #include "ac97.h"
 #include "pci.h"
 #include "klog.h"
@@ -7,9 +9,9 @@
 #include <string.h>
 #include <stdint.h>
 
-#define CHUNK_SIZE 65532
-#define CHUNK_SECTORS 256
-#define BDL_ENTRIES 32
+#define CHUNK_SIZE 65532 //audio buffer
+#define CHUNK_SECTORS 256 //how many storage sectors need to be read from drive (wav, not whole waw at once)
+#define BDL_ENTRIES 32 //based on ac97 specs
 
 extern void select_drive(uint16_t base, uint8_t slave);
 extern void block_read(uint32_t lba, uint8_t* buf);

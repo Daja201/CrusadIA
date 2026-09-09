@@ -3,7 +3,7 @@ global loader
 extern kmain
 
 MAGIC_NUMBER      equ 0x1BADB002
-FLAGS             equ (1<<0) | (1<<1) | (1<<2)   ; Bit 2 is REQUIRED for video mode
+FLAGS             equ (1<<0) | (1<<1) | (1<<2)
 CHECKSUM          equ -(MAGIC_NUMBER + FLAGS)
 KERNEL_STACK_SIZE equ 65536
 
@@ -12,17 +12,15 @@ section .multiboot
     dd MAGIC_NUMBER
     dd FLAGS
     dd CHECKSUM    
-
     dd 0
     dd 0
     dd 0
     dd 0
     dd 0 
-    
     dd 0    
     dd 1920
     dd 1080
-    dd 32 
+    dd 32
 
 section .bss
     align 16
@@ -36,7 +34,6 @@ section .text
 loader:
     lea esp, [kernel_stack + KERNEL_STACK_SIZE]
     mov ebp, esp
-
     push ebx
     push eax
     call kmain

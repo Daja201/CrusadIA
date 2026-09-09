@@ -1,15 +1,12 @@
-# compilers
 NASM = nasm
 CC   = gcc
 LD   = ld
 GENISO = genisoimage
 
-# flags
 NASM_FLAGS = -f elf32
 CFLAGS = -m32 -ffreestanding -c -fno-builtin
 LD_FLAGS = -m elf_i386 -T link.ld
 
-# files
 C_SRC := $(wildcard *.c)
 ASM_SRC := $(wildcard *.s)
 OBJ := $(patsubst %.c,%.o,$(C_SRC)) $(patsubst %.s,%.o,$(ASM_SRC))
@@ -50,6 +47,7 @@ clean:
 	rm -rf $(ISO_DIR)
 	-rm -f disk.img
 	-rm -f disk2.img
+
 run:
 	qemu-system-i386 -cdrom os.iso -boot d \
 		-drive file=disk.img,format=raw,bus=0,unit=0,media=disk \
@@ -61,6 +59,7 @@ run:
 		-m 2G -vga std -serial stdio -enable-kvm \
 		-display gtk,zoom-to-fit=on,full-screen=on \
 		-d guest_errors,unimp,int -D /tmp/qemu-debug.log
+
 dd_second:
 	dd if=/dev/zero of=disk2.img bs=1M count=64 status=progress
 dd32:

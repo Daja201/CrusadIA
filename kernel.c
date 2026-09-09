@@ -1,5 +1,4 @@
 #include "klog.h"
-#include "bioskbd.h"
 #include "terminal.h"
 #include "fs.h"
 #include "rtc.h"
@@ -8,51 +7,45 @@
 #include "commands.h"
 #include "bootinfo.h"
 #include "pmm.h"
-#include "bioskbd.h"
 #include "idt.h"
 #include "task.h"
 #include "io.h"
 #include "ac97.h"
 #include "usb.h"
 
+//initializes pci and searches for usb devices
 void usb_pci_init(void);
 void usb_poll_all(void);
-volatile uint32_t timer_ticks = 0;
+//volatile uint32_t timer_ticks = 0;  //var
 
+// function for calling pit on sent frequency.
 void timer_init(uint32_t frequency) {
-    uint32_t divisor = 1193182 / frequency;
-    outb(0x43, 0x36);
+    uint32_t divisor = 1193182 / frequency; //1193182 is default pit freq for x86.
+    outb(0x43, 0x36); // configurates timer
     outb(0x40, (uint8_t)(divisor & 0xFF));
     outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
 }
- 
+
 void system_main_task() {
-    int last_sec = -1;
+    int last_sec = -1; 
     for (;;) {
         int needs_redraw = 0;
         extern volatile int usb_kbd_dirty;
-        usb_poll_all();
-        if (usb_kbd_dirty) {
+        usb_poll_all();  // updates state of usb devs
+        if (usb_kbd_dirty) { //check for queued keystrokles (usb)
             usb_kbd_dirty = 0;
             needs_redraw = 1;
         }
-        if (bios_has_char()) { 
-            char c = bios_getchar_echo(); 
-            if (c != 0) {
-                terminal_key(c);
-                needs_redraw = 1;
-            }
-        }
         int y, m, d, h, min, sec;
-        rtc_get_datetime(&y, &m, &d, &h, &min, &sec);
-        if (sec != last_sec) {
+        rtc_get_datetime(&y, &m, &d, &h, &min, &sec); //just upadtes data from rtc
+        if (sec != last_sec) { //every second -> +1 last_sec
             last_sec = sec;
         }
-        if (needs_redraw) {
+        if (needs_redraw) { //redraws if any of the before ifs swithced needs redraw (like new char from queqe)
             cursor('d');
             vesa_swap();
         }
-        asm volatile("pause");
+        asm volatile("pause"); //cpu hint instr for x86 that waits a bit and doesnt use that much power(higher perf)
     }
 }
 

@@ -23,6 +23,7 @@
 #include "fat32.h"
 #include "usb.h"
 #include "usbhid.h"
+#include "templar.h"
 
 #define CHUNK_SIZE 65532
 extern fs_device_t g_drives[MAX_DRIVES];
@@ -783,8 +784,8 @@ void cmd_open(int argc, char** argv) {
         else if (strcmp(dot, ".txt") == 0) {
             cmd_read(argc, argv);
         } 
-        else if (strcmp(dot, ".tmplr") == 0) {
-            klog("please add templar already");
+        else if (strcmp(dot, ".tpl") == 0) {
+            templar_run_file(filename);
         } 
         else {
             klog_status("UNKNOWN EXTENSION", 0xFF0000);

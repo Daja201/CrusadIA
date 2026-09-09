@@ -1,3 +1,4 @@
+//simple engine to run "apps as named sequences of commands or something more"
 #include "klog.h"
 #include "app.h"
 #include <string.h>
@@ -12,5 +13,5 @@ void app(const char *app_name) {
 }
 
 void app_game() {
-    kklog("GAME");
+    kklog("NO GAMES YET SRR ):");
 }
