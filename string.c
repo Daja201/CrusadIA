@@ -1,6 +1,7 @@
 #include "string.h"
 #include "stdint.h"
 
+//compares 2 strings by ASCII character valuables 
 int strcmp(const char* a, const char* b) {
     while (*a && (*a == *b)) {
         a++;
@@ -9,6 +10,7 @@ int strcmp(const char* a, const char* b) {
     return (unsigned char)*a - (unsigned char)*b;
 }
 
+//looks for last character 
 char* strrchr(const char* s, int c) {
     char* last = NULL;
     if (s == NULL) return NULL;
@@ -27,6 +29,7 @@ char* strrchr(const char* s, int c) {
     return last;
 }
 
+//copies string into destination array
 char *strcpy(char *dest, const char *src) {
     char *save = dest;
     while (*src) {
@@ -36,12 +39,14 @@ char *strcpy(char *dest, const char *src) {
     return save;
 }
 
+//counts lenght of string
 size_t strlen(const char* str) {
     size_t len = 0;
     while (str[len]) len++;
     return len;
 }
 
+//copies a specified number of bytes from a source to some place
 void *memcpy(void *dest, const void *src, size_t n) {
     unsigned char *d = (unsigned char*)dest;
     const unsigned char *s = (const unsigned char*)src;
@@ -49,12 +54,15 @@ void *memcpy(void *dest, const void *src, size_t n) {
     return dest;
 }
 
+// can write bytes of memory into virtual mem when pagings enabled
 void *memset(void *s, int c, size_t n) {
     unsigned char *p = (unsigned char*)s;
-    while (n--) *p++ = (unsigned char)c;
+    while (n--) *p++ = (unsigned char)c;'=';
     return s;
 }
 
+//returns difference between bytes
+//difference as number between a and b
 int memcmp(const void *a, const void *b, size_t n) {
     const unsigned char *pa = (const unsigned char*)a;
     const unsigned char *pb = (const unsigned char*)b;
@@ -65,6 +73,8 @@ int memcmp(const void *a, const void *b, size_t n) {
     return 0;
 }
 
+//converts integers into ascii
+//value –> writes into buffer as base (decimal etc)
 char* itoa(int value, char* buffer, int base) {
     if (base < 2 || base > 16) {
         buffer[0] = 0;
@@ -104,6 +114,8 @@ char* itoa(int value, char* buffer, int base) {
     return buffer;
 }
 
+// copies source string at the end to destination 
+// finds end of dest and copies src to it
 char *strcat(char *dest, const char *src) {
     char *ptr = dest;
     while (*ptr) ptr++;
@@ -114,6 +126,7 @@ char *strcat(char *dest, const char *src) {
     return dest;
 }
 
+//string to integer converter
 int str_to_int(const char *str) {
     int res = 0;
     for (int i = 0; str[i] != '\0'; ++i) {
@@ -126,6 +139,7 @@ int str_to_int(const char *str) {
     return res;
 }
 
+//copies n chars of src to dest while padding the rest with '\0'
 char* strncpy(char* dest, const char* src, size_t n) {
     size_t i;
     for (i = 0; i < n && src[i] != '\0'; i++) dest[i] = src[i];
@@ -133,6 +147,7 @@ char* strncpy(char* dest, const char* src, size_t n) {
     return dest;
 }
 
+//ascii to integer
 int atoi(const char* s) {
     if (!s) return 0;
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' || *s == '\f' || *s == '\v') s++;
@@ -143,6 +158,7 @@ int atoi(const char* s) {
     return (int)(val * sign);
 }
 
+//string to long integer
 long strtol(const char* nptr, char** endptr, int base) {
     const char* s = nptr;
     while (*s == ' ' || *s == '\t' || *s == '\n' || *s == '\r' || *s == '\f' || *s == '\v') s++;
@@ -171,6 +187,7 @@ long strtol(const char* nptr, char** endptr, int base) {
     return acc * sign;
 }
 
+//case insensitive string comparison
 int strcasecmp(const char* a, const char* b) {
     while (*a && *b) {
         unsigned char ca = (unsigned char)tolower(*a);
