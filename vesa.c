@@ -1,3 +1,5 @@
+//standartized VESA graphics driver, set to FullHD 1080p b default, can be changed in loader.s
+
 #include "vesa.h"
 #include "font.h"
 #include <stdint.h>

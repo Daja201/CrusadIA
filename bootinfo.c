@@ -39,9 +39,9 @@ void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
             uint32_t len_low  = *(uint32_t*)(current_addr + 12);
             uint32_t type     = *(uint32_t*)(current_addr + 20);
 
-            if (type == 1) { // Typ 1 = Volná, použitelná RAM
+            if (type == 1) {
                 klogf("  Free RAM: base=0x%x, size=%d bytes\n", base_low, len_low);
-                pmm_init_region(base_low, len_low); // Odemkneme v PMM
+                pmm_init_region(base_low, len_low);
             } else {
                 klogf("  Reserved: base=0x%x, size=%d bytes\n", base_low, len_low);
             }
