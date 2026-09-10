@@ -56,9 +56,10 @@ run:
 		-device pci-ohci,id=ohci \
 		-device usb-ehci,id=ehci \
 		-device usb-kbd,bus=ohci.0 \
-		-m 2G -vga std -serial stdio -enable-kvm \
+		-m 8G -vga std -serial stdio -enable-kvm \
 		-display gtk,zoom-to-fit=on,full-screen=on \
 		-d guest_errors,unimp,int -D /tmp/qemu-debug.log
+		
 
 dd_second:
 	dd if=/dev/zero of=disk2.img bs=1M count=64 status=progress
