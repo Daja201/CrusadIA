@@ -1,7 +1,7 @@
 #include "terminal.h"
 #include "commands.h"
 #include "klog.h"
-#include <string.h>
+#include "string.h"
 
 #define HISTORY_SIZE 16
 #define ARROW_UP 1

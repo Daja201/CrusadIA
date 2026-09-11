@@ -3,7 +3,7 @@
 #include "pmm.h"
 #include "pci.h"
 #include "klog.h"
-#include <string.h>
+#include "string.h"
 
 #define EHCI_MAX_HC 4
 #define EHCI_TIMEOUT_LOOPS 2000000

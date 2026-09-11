@@ -3,7 +3,7 @@
 #include "vesa.h"
 #include "font.h"
 #include <stdint.h>
-#include <string.h>
+#include "string.h"
 
 int c_x = 0;
 int c_y = 0;

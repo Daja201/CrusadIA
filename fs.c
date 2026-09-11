@@ -1,7 +1,7 @@
 #include "klog.h"
 #include "fs.h"
 #include <stdint.h>
-#include <string.h>
+#include "string.h"
 #include "string.h"
 #include "io.h"
 #include "terminal.h"

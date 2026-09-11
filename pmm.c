@@ -1,5 +1,5 @@
 #include "pmm.h"
-#include <string.h>
+#include "string.h"
 
 static uint32_t pmm_bitmap[PMM_MAX_BLOCKS / 32];
 static uint32_t pmm_used_blocks = 0;

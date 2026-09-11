@@ -5,7 +5,7 @@
 #include "string.h"
 #include <stdarg.h>
 #include "commands.h"
-#include <string.h>
+#include "string.h"
 #include "diskinfo.h"
 #include "fs.h"
 #include "pmm.h"
@@ -277,7 +277,7 @@ void logo() {
 }
 
 void klog_status(const char *status_str, uint32_t color) {
-    klog('\n');
+    klog("\n");
     klog_color("sysmsg: ", color);
     kklog_color(status_str, color);
 }

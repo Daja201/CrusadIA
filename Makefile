@@ -1,7 +1,23 @@
+UNAME_S := $(shell uname -s)
+
 NASM = nasm
-CC   = gcc
-LD   = ld
 GENISO = genisoimage
+
+ifeq ($(UNAME_S),Darwin)
+    CC   = i686-elf-gcc
+    LD   = i686-elf-ld
+    GRUB_MKRESCUE = $(shell command -v i686-elf-grub-mkrescue 2>/dev/null || echo grub-mkrescue)
+    QEMU_AUDIO   = -audiodev coreaudio,id=snd0
+    QEMU_DISPLAY = -display cocoa,zoom-to-fit=on,full-screen=on
+	QEMU_ACCEL = -cpu max -smp cpus=4,cores=4
+else
+    CC   = gcc
+    LD   = ld
+    GRUB_MKRESCUE = grub-mkrescue
+    QEMU_ACCEL   = -enable-kvm
+    QEMU_AUDIO   = -audiodev pa,id=snd0
+    QEMU_DISPLAY = -display gtk,zoom-to-fit=on,full-screen=on
+endif
 
 NASM_FLAGS = -f elf32
 CFLAGS = -m32 -ffreestanding -c -fno-builtin
@@ -40,7 +56,7 @@ $(ISO): $(KERNEL)
 	echo "  multiboot /boot/kernel.elf" >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo "  boot" >> $(ISO_DIR)/boot/grub/grub.cfg
 	echo "}" >> $(ISO_DIR)/boot/grub/grub.cfg
-	grub-mkrescue -o $(ISO) $(ISO_DIR)
+	$(GRUB_MKRESCUE) -o $(ISO) $(ISO_DIR)
 
 clean:
 	rm -f *.o $(KERNEL) $(ISO)
@@ -52,12 +68,12 @@ run:
 	qemu-system-i386 -cdrom os.iso -boot d \
 		-drive file=disk.img,format=raw,bus=0,unit=0,media=disk \
 		-drive file=disk2.img,format=raw,bus=0,unit=1,media=disk \
-		-audiodev pa,id=snd0 -device ac97,audiodev=snd0 \
+		$(QEMU_AUDIO) -device ac97,audiodev=snd0 \
 		-device pci-ohci,id=ohci \
 		-device usb-ehci,id=ehci \
 		-device usb-kbd,bus=ohci.0 \
-		-m 8G -vga std -serial stdio -enable-kvm \
-		-display gtk,zoom-to-fit=on,full-screen=on \
+		-m 8G -vga std -serial stdio $(QEMU_ACCEL) \
+		$(QEMU_DISPLAY) \
 		-d guest_errors,unimp,int -D /tmp/qemu-debug.log
 		
 

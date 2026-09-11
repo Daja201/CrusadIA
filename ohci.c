@@ -2,7 +2,7 @@
 #include "usb.h"
 #include "pmm.h"
 #include "klog.h"
-#include <string.h>
+#include "string.h"
 
 #define OHCI_MAX_HC 4
 #define OHCI_TIMEOUT_LOOPS 2000000

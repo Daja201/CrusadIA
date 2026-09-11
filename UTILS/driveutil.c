@@ -17,9 +17,8 @@
  *   mkfs [total_sectors] [inode_count]  create a fresh, empty COS image
 */
 
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include "string.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <fcntl.h>

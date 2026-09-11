@@ -1,7 +1,7 @@
 //simple engine to run "apps as named sequences of commands or something more"
 #include "klog.h"
 #include "app.h"
-#include <string.h>
+#include "string.h"
 
 void app(const char *app_name) {
     if (strcmp(app_name, "game") == 0) {

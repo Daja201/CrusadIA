@@ -1,6 +1,6 @@
 #include "idt.h"
 #include "io.h"
-#include <string.h>
+#include "string.h"
 #include "string.h"
 #include "klog.h"
 #include "vesa.h"

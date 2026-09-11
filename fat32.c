@@ -1,5 +1,5 @@
 #include "fat32.h"
-#include <string.h>
+#include "string.h"
 #include "klog.h"
 
 extern void block_read(uint32_t lba, uint8_t* buf);

@@ -2,7 +2,7 @@
 #include "usbhid.h"
 #include "usbhub.h"
 #include "klog.h"
-#include <string.h>
+#include "string.h"
 
 static usb_device_t g_devices[USB_MAX_DEVICES];
 static int g_next_address = 1;

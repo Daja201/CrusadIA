@@ -6,7 +6,7 @@
 #include "io.h"
 #include "fs.h"
 #include "task.h"
-#include <string.h>
+#include "string.h"
 #include <stdint.h>
 
 #define CHUNK_SIZE 65532 //audio buffer
@@ -223,7 +223,7 @@ static void play_wav_file_entry(void) {
 void play_wav_file_jmp(const char* filename) {
     strncpy(g_pending_wav_path, filename, sizeof(g_pending_wav_path) - 1);
     g_pending_wav_path[sizeof(g_pending_wav_path) - 1] = '\0';
-    create_task(play_wav_file_entry);
+    create_task(play_wav_file_entry, 1);
 }
 
 int play_wav_file(const char* filename) {

@@ -1,7 +1,7 @@
 #include "usbhub.h"
 #include "usb.h"
 #include "klog.h"
-#include <string.h>
+#include "string.h"
 
 #define USB_HUB_REQ_GET_STATUS    0x00
 #define USB_HUB_REQ_CLEAR_FEATURE 0x01

@@ -1,10 +1,7 @@
 #include "commands.h"
 #include "terminal.h"
-#include <string.h>
-#include <stdio.h>
+#include "string.h"
 #include <stdint.h>
-#include <stdlib.h>
-#include <cpuid.h>
 #include "reboot.h"
 #include "diskinfo.h"
 #include "fs.h"
@@ -127,9 +124,23 @@ void cmd_cow(int argc, char** argv) {
     vesa_swap();
 }
 
-void cmd_mem() {
+void cmd_mem(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     uint32_t free_kb = pmm_count_mem();
     klogf("Free memory: %d KB (%d MB)\n", free_kb, free_kb / 1024);
+}
+
+static void cmd_ac97_stop(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    ac97_stop();
+}
+
+static void cmd_ac97_pause(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    ac97_pause();
 }
 
 void cmd_cat(int argc, char** argv) {
@@ -844,8 +855,8 @@ command_t commands[] = {
     {"cd", cmd_cd},
     {"usb", cmd_usb},
     {"open", cmd_open},
-    {"mustop", ac97_stop},
-    {"mupause", ac97_pause},
+    {"mustop", cmd_ac97_stop},
+    {"mupause", cmd_ac97_pause},
     {"vol", cmd_ac97_set_volume},
     {"sett", cmd_set_timezone},
 };

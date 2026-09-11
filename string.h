@@ -3,6 +3,9 @@
 #include <stddef.h>
 #include <stdint.h>
 int strcmp(const char* a, const char* b);
+char *strcpy(char *dest, const char *src);
+char *strcat(char *dest, const char *src);
+char *strrchr(const char* s, int c);
 size_t strlen(const char* s);
 void *memcpy(void *dest, const void *src, size_t n);
 void *memset(void *s, int c, size_t n);
