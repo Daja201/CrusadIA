@@ -39,6 +39,7 @@ static const lib_entry_t lib_entries[] = {
     {"time",     "ADVANCED", "time",                  "shows time from RealTimeClock"},
     {"sett",     "ADVANCED", "sett <0-12>",                  "sets timezone"},
     {"usb",     "ADVANCED", "usb",                  "shows available usb devices"},
+    {"ss",     "ADVANCED", "ss <character>",                  "sends serial on COM1"},
     {"app",      "ADVANCED", "app <app_name>",         "runs an app"},
 };
 

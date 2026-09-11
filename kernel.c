@@ -12,6 +12,7 @@
 #include "io.h"
 #include "ac97.h"
 #include "usb.h"
+#include "serial.h"
 
 //initializes pci and searches for usb devices
 void usb_pci_init(void);
@@ -77,6 +78,7 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     klog("\n");
     klog_color("CRUSADER>> ", 0xFFFF00);
     vesa_swap();
+    init_serial();
     asm volatile("sti");
     while (1) {
         asm volatile("hlt");

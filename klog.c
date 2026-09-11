@@ -277,7 +277,7 @@ void logo() {
 }
 
 void klog_status(const char *status_str, uint32_t color) {
-    klog("\n");
+    //klog("\n");
     klog_color("sysmsg: ", color);
     kklog_color(status_str, color);
 }

@@ -828,6 +828,16 @@ void cmd_set_timezone(int argc, char** argv) {
     timezone = (uint8_t)val;
 }
 
+void cmd_send_serial(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: ss <string>\n");
+        return;
+    }
+    for (char *p = argv[1]; *p; p++) {
+        write_serial(*p);
+    }
+}
+
 command_t commands[] = {
     {"help", cmd_help},
     {"clear", cmd_clear},
@@ -859,6 +869,7 @@ command_t commands[] = {
     {"mupause", cmd_ac97_pause},
     {"vol", cmd_ac97_set_volume},
     {"sett", cmd_set_timezone},
+    {"ss", cmd_send_serial},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);
