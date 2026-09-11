@@ -26,6 +26,8 @@ void init_multitasking() {
     current_task = 0;
 }
 
+static uint32_t ticks_left_on_current = 0;
+
 uint32_t schedule_handler(uint32_t esp) {
     system_ticks++;
     if (num_tasks <= 1) {
@@ -34,10 +36,25 @@ uint32_t schedule_handler(uint32_t esp) {
     if (current_task >= 0) {
         tasks[current_task].esp = esp;
     }
-    current_task++;
-    if (current_task >= num_tasks) {
-        current_task = 0;
+
+    if (ticks_left_on_current > 0) {
+        ticks_left_on_current--;
+        return tasks[current_task].esp;
     }
+
+    for (;;) {
+        current_task++;
+        if (current_task >= num_tasks) {
+            current_task = 0;
+        }
+        if (tasks[current_task].state == TASK_READY ||
+            tasks[current_task].state == TASK_RUNNING) {
+            break;
+        }
+    }
+    uint32_t p = tasks[current_task].priority;
+    ticks_left_on_current = (p > 0) ? (p - 1) : 0;
+
     return tasks[current_task].esp;
 }
 
@@ -45,7 +62,6 @@ void create_task(void (*entry_point)(), uint32_t priority) {
     if (num_tasks >= MAX_TASKS) return;
     void* stack_mem = pmm_alloc_block(); 
     if (!stack_mem) return;
-    int priority_int = 1;
     uint32_t *stack = (uint32_t *)((uint32_t)stack_mem + 4096);
     *(--stack) = (uint32_t)task_exit;
     *(--stack) = 0x0202;                
@@ -53,13 +69,13 @@ void create_task(void (*entry_point)(), uint32_t priority) {
     *(--stack) = (uint32_t)entry_point; 
     *(--stack) = 0;                  
     *(--stack) = 32;    
-    *(--stack) = priority_int;            
+    *(--stack) = 0;
     for (int i = 0; i < 7; i++) *(--stack) = 0; 
     for (int i = 0; i < 4; i++) *(--stack) = 0x18; 
-    for (int i = priority_int; i > 0; i--) {
-        tasks[num_tasks].esp = (uint32_t)stack;
-        tasks[num_tasks].pid = num_tasks;
-        tasks[num_tasks].state = TASK_READY;
-        num_tasks++;
-    }
+
+    tasks[num_tasks].esp = (uint32_t)stack;
+    tasks[num_tasks].pid = num_tasks;
+    tasks[num_tasks].state = TASK_READY;
+    tasks[num_tasks].priority = priority;
+    num_tasks++;
 }
