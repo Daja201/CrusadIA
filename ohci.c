@@ -126,6 +126,49 @@ static int ohci_do_control(usb_hcd_t* hcdp, usb_device_t* dev, usb_setup_pkt_t* 
     return len;
 }
 
+/* Blocking bulk IN/OUT transfer for non-HID class/vendor drivers (e.g. a
+   PL2303 USB-serial adapter). A dedicated ED per device is cached in
+   dev->driver_priv (separate from the control-transfer ED in hcd_priv)
+   since it needs its own toggle/queue state. */
+static int ohci_bulk_transfer(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t ep_addr, void* buf, int len, int dir_in, int* toggle) {
+    ohci_hc_t* hc = (ohci_hc_t*)hcdp->priv;
+    if (len <= 0 || len > 4096) return -1;
+
+    ohci_ed_t* ed = ohci_alloc_ed();
+    ohci_td_t* td = ohci_alloc_td();
+    ohci_td_t* tail = ohci_alloc_td();
+
+    uint32_t tbit = (*toggle & 1) ? OHCI_TD_T_DATA1 : OHCI_TD_T_DATA0;
+    td->control = OHCI_TD_CC_MASK | (dir_in ? OHCI_TD_DP_IN : OHCI_TD_DP_OUT) | OHCI_TD_DI_IMMEDIATE | tbit | OHCI_TD_R;
+    td->cbp = (uint32_t)(uintptr_t)buf;
+    td->buffer_end = (uint32_t)(uintptr_t)buf + len - 1;
+    td->next_td = (uint32_t)(uintptr_t)tail;
+
+    int maxpkt = dir_in ? dev->ep_in_maxpkt : dev->ep_out_maxpkt;
+    if (maxpkt <= 0) maxpkt = 64;
+    ed->control = (dev->address << OHCI_ED_FA_SHIFT) | ((ep_addr & 0xF) << OHCI_ED_EN_SHIFT) |
+                  (dir_in ? OHCI_ED_DIR_IN : OHCI_ED_DIR_OUT) | (maxpkt << OHCI_ED_MPS_SHIFT);
+    if (dev->speed == 1) ed->control |= OHCI_ED_SPEED_LOW;
+    ed->head_td = (uint32_t)(uintptr_t)td;
+    ed->tail_td = (uint32_t)(uintptr_t)tail;
+    ed->next_ed = 0;
+
+    ohci_write(hc, OHCI_REG_BULKHEADED, (uint32_t)(uintptr_t)ed);
+    ohci_write(hc, OHCI_REG_CONTROL, ohci_read(hc, OHCI_REG_CONTROL) | OHCI_CTRL_BLE);
+    ohci_write(hc, OHCI_REG_CMDSTATUS, ohci_read(hc, OHCI_REG_CMDSTATUS) | OHCI_CMDSTATUS_BLF);
+
+    int r = ohci_wait_td_done(ed, tail);
+
+    ohci_write(hc, OHCI_REG_CONTROL, ohci_read(hc, OHCI_REG_CONTROL) & ~OHCI_CTRL_BLE);
+    ohci_write(hc, OHCI_REG_BULKHEADED, 0);
+
+    if (r != 0) return -1;
+
+    int packets = (len > 0) ? ((len + maxpkt - 1) / maxpkt) : 1;
+    *toggle = (*toggle ^ (packets & 1)) & 1;
+    return len;
+}
+
 typedef struct {
     usb_device_t* dev;
     void (*callback)(usb_device_t*, uint8_t*, int);
@@ -293,6 +336,7 @@ usb_hcd_t* ohci_probe_and_init(uint32_t bar0_phys) {
 
     hc->hcd.control_transfer = ohci_do_control;
     hc->hcd.setup_interrupt_in = ohci_setup_interrupt_in;
+    hc->hcd.bulk_transfer = ohci_bulk_transfer;
     hc->hcd.priv = hc;
 
     klog_status("OHCI CONTROLLER STARTED", 0x00FF00);

@@ -1,6 +1,7 @@
 #include "usb.h"
 #include "usbhid.h"
 #include "usbhub.h"
+#include "pl2303.h"
 #include "klog.h"
 #include "string.h"
 
@@ -54,6 +55,22 @@ int usb_set_configuration(usb_device_t* dev, int config) {
     return usb_control_transfer(dev, 0x00, USB_REQ_SET_CONFIGURATION, config, 0, 0, 0);
 }
 
+int usb_bulk_write(usb_device_t* dev, const void* buf, int len) {
+    if (!dev || !dev->hcd || !dev->hcd->bulk_transfer || !dev->ep_out_addr) return -1;
+    int t = dev->bulk_out_toggle;
+    int r = dev->hcd->bulk_transfer(dev->hcd, dev, dev->ep_out_addr, (void*)buf, len, 0, &t);
+    dev->bulk_out_toggle = t & 1;
+    return r;
+}
+
+int usb_bulk_read(usb_device_t* dev, void* buf, int len) {
+    if (!dev || !dev->hcd || !dev->hcd->bulk_transfer || !dev->ep_in_addr) return -1;
+    int t = dev->bulk_in_toggle;
+    int r = dev->hcd->bulk_transfer(dev->hcd, dev, dev->ep_in_addr, buf, len, 1, &t);
+    dev->bulk_in_toggle = t & 1;
+    return r;
+}
+
 static void usb_parse_config(usb_device_t* dev, uint8_t* cfgbuf, int total_len) {
     uint8_t* p = cfgbuf;
     uint8_t* end = cfgbuf + total_len;
@@ -68,12 +85,24 @@ static void usb_parse_config(usb_device_t* dev, uint8_t* cfgbuf, int total_len) 
             dev->iface_subclass = id->bInterfaceSubClass;
             dev->iface_protocol = id->bInterfaceProtocol;
             found_iface = 1;
-        } else if (type == USB_DESC_ENDPOINT && found_iface && dev->ep_in_addr == 0) {
+        } else if (type == USB_DESC_ENDPOINT && found_iface) {
             usb_endpoint_descriptor_t* ed = (usb_endpoint_descriptor_t*)p;
-            if ((ed->bmAttributes & 0x03) == 0x03 && (ed->bEndpointAddress & 0x80)) {
+            uint8_t ep_type = ed->bmAttributes & USB_EP_TYPE_MASK;
+            int is_in = (ed->bEndpointAddress & USB_EP_DIR_IN) != 0;
+            if (dev->ep_in_addr == 0 && ep_type == USB_EP_TYPE_INTERRUPT && is_in) {
                 dev->ep_in_addr = ed->bEndpointAddress;
                 dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
                 dev->ep_in_interval = ed->bInterval ? ed->bInterval : 10;
+            } else if (dev->ep_in_addr == 0 && ep_type == USB_EP_TYPE_BULK && is_in) {
+                /* Vendor-specific serial adapters (PL2303 etc.) have no interrupt-IN
+                   data endpoint; their bulk-IN endpoint is stored here instead. */
+                dev->ep_in_addr = ed->bEndpointAddress;
+                dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
+                dev->ep_in_interval = 0;
+            }
+            if (dev->ep_out_addr == 0 && ep_type == USB_EP_TYPE_BULK && !is_in) {
+                dev->ep_out_addr = ed->bEndpointAddress;
+                dev->ep_out_maxpkt = ed->wMaxPacketSize & 0x7FF;
             }
         }
         p += len;
@@ -138,7 +167,9 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
     klogf_color("usb: dev addr=%d vid=0x%x pid=0x%x class=0x%x sub=0x%x\n", 0x00FF00,
         dev->address, dev->dev_desc.idVendor, dev->dev_desc.idProduct, dev->iface_class, dev->iface_subclass);
 
-    if (dev->iface_class == USB_CLASS_HID) {
+    if (pl2303_probe(dev)) {
+        pl2303_attach(dev);
+    } else if (dev->iface_class == USB_CLASS_HID) {
         usbhid_attach(dev);
     } else if (dev->iface_class == USB_CLASS_HUB) {
         usbhub_attach(dev);

@@ -73,6 +73,7 @@ run:
 		-device usb-ehci,id=ehci \
 		-device usb-kbd,bus=ohci.0 \
 		-m 8G -vga std -serial stdio $(QEMU_ACCEL) \
+		-device usb-host,vendorid=0x067b,productid=0x23a3,bus=ohci.0 \
 		$(QEMU_DISPLAY) \
 		-d guest_errors,unimp,int -D /tmp/qemu-debug.log
 		

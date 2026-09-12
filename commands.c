@@ -21,6 +21,8 @@
 #include "usb.h"
 #include "usbhid.h"
 #include "templar.h"
+#include "pl2303.h"
+#include "pump.h"
 
 #define CHUNK_SIZE 65532
 extern fs_device_t g_drives[MAX_DRIVES];
@@ -838,6 +840,101 @@ void cmd_send_serial(int argc, char** argv) {
     }
 }
 
+static void pump_report(const char* label, int r, const char* reply) {
+    if (r < 0) {
+        klog_status("PUMP: NO REPLY (check adapter / serial enable link)", 0xFF0000);
+        return;
+    }
+    kklogf("%s -> %s\n", label, reply);
+}
+
+void cmd_pumpon(int argc, char** argv) {
+    (void)argc; (void)argv;
+    if (!pump_is_ready()) { klog_status("PUMP: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+    char reply[PUMP_MAX_MSG];
+    int r = pump_start(reply, sizeof(reply));
+    pump_report("start", r, reply);
+}
+
+void cmd_pumpoff(int argc, char** argv) {
+    (void)argc; (void)argv;
+    if (!pump_is_ready()) { klog_status("PUMP: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+    char reply[PUMP_MAX_MSG];
+    int r = pump_stop(reply, sizeof(reply));
+    pump_report("stop", r, reply);
+}
+
+void cmd_pumpspeed(int argc, char** argv) {
+    (void)argc; (void)argv;
+    if (!pump_is_ready()) { klog_status("PUMP: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+    char reply[PUMP_MAX_MSG];
+    int r = pump_query_speed(reply, sizeof(reply));
+    pump_report("speed", r, reply);
+}
+
+void cmd_pumpfull(int argc, char** argv) {
+    (void)argc; (void)argv;
+    if (!pump_is_ready()) { klog_status("PUMP: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+    char reply[PUMP_MAX_MSG];
+    int r = pump_target_full_speed(reply, sizeof(reply));
+    pump_report("target-full", r, reply);
+}
+
+void cmd_pumpstandby(int argc, char** argv) {
+    (void)argc; (void)argv;
+    if (!pump_is_ready()) { klog_status("PUMP: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+    char reply[PUMP_MAX_MSG];
+    int r = pump_target_standby_speed(reply, sizeof(reply));
+    pump_report("target-standby", r, reply);
+}
+
+void cmd_pumptype(int argc, char** argv) {
+    (void)argc; (void)argv;
+    if (!pump_is_ready()) { klog_status("PUMP: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+    char reply[PUMP_MAX_MSG];
+    int r = pump_query_pump_type(reply, sizeof(reply));
+    pump_report("type", r, reply);
+}
+
+void cmd_pumpcmd(int argc, char** argv) {
+    if (argc < 3) {
+        kklog("Usage: pumpcmd <!|?> <BODY, e.g. C852 1>\n");
+        return;
+    }
+    if (!pump_is_ready()) { klog_status("PUMP: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+    char start = argv[1][0];
+    if (start != '!' && start != '?') {
+        kklog("First arg must be '!' (store/command) or '?' (query)\n");
+        return;
+    }
+    char reply[PUMP_MAX_MSG];
+    int r = pump_send_command(start, argv[2], reply, sizeof(reply));
+    pump_report("pumpcmd", r, reply);
+}
+
+extern volatile uint32_t system_ticks;
+
+static void delay_ms(uint32_t ms) {
+    uint32_t target = system_ticks + ms;
+    while (system_ticks < target) {
+        asm volatile("hlt");
+    }
+}
+
+void cmd_blink(int argc, char** argv) {
+    usb_device_t* dev = pl2303_get_active();
+    if (!dev) { klog_status("BLINK: NO USB-SERIAL ADAPTER ATTACHED", 0xFF0000); return; }
+
+    int times = (argc >= 2) ? atoi(argv[1]) : 5;
+    int period_ms = (argc >= 3) ? atoi(argv[2]) : 500;
+    if (times <= 0) times = 5;
+    if (period_ms <= 0) period_ms = 500;
+
+    kklogf("blink: toggling DTR x%d (%dms period)\n", times, period_ms);
+    pl2303_set_control_lines(dev, 1, 0);
+
+}
+
 command_t commands[] = {
     {"help", cmd_help},
     {"clear", cmd_clear},
@@ -870,6 +967,14 @@ command_t commands[] = {
     {"vol", cmd_ac97_set_volume},
     {"sett", cmd_set_timezone},
     {"ss", cmd_send_serial},
+    {"pumpon", cmd_pumpon},
+    {"pumpoff", cmd_pumpoff},
+    {"pumpspeed", cmd_pumpspeed},
+    {"pumpfull", cmd_pumpfull},
+    {"pumpstandby", cmd_pumpstandby},
+    {"pumptype", cmd_pumptype},
+    {"pumpcmd", cmd_pumpcmd},
+    {"blink", cmd_blink},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);

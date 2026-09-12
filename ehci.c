@@ -149,6 +149,53 @@ static int ehci_do_control(usb_hcd_t* hcdp, usb_device_t* dev, usb_setup_pkt_t* 
     return len;
 }
 
+/* Blocking bulk IN/OUT transfer, used by class/vendor drivers that are not
+   HID (e.g. USB-to-serial adapters like the PL2303). One QH+QTD is built
+   fresh per call; the data-toggle bit is threaded through by the caller
+   (usb_bulk_read/usb_bulk_write) so consecutive calls stay in sync. */
+static int ehci_bulk_transfer(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t ep_addr, void* buf, int len, int dir_in, int* toggle) {
+    ehci_hc_t* hc = (ehci_hc_t*)hcdp->priv;
+    if (len <= 0 || len > 4096) return -1;
+
+    ehci_qtd_t* td = ehci_alloc_qtd();
+    ehci_fill_qtd(td, dir_in ? EHCI_QTD_PID_IN : EHCI_QTD_PID_OUT, *toggle & 1, buf, len, 1);
+
+    ehci_qh_t* qh = ehci_alloc_qh();
+    int speed_field = dev->speed == 2 ? EHCI_QH_EPCHAR_EPS_HIGH : (dev->speed == 1 ? EHCI_QH_EPCHAR_EPS_LOW : EHCI_QH_EPCHAR_EPS_FULL);
+    int maxpkt = dir_in ? dev->ep_in_maxpkt : dev->ep_out_maxpkt;
+    if (maxpkt <= 0) maxpkt = 64;
+    qh->ep_char = (dev->address << EHCI_QH_EPCHAR_DEVADDR_SHIFT) | ((ep_addr & 0xF) << EHCI_QH_EPCHAR_EP_SHIFT) |
+                  (speed_field << EHCI_QH_EPCHAR_EPS_SHIFT) | EHCI_QH_EPCHAR_DTC |
+                  (maxpkt << EHCI_QH_EPCHAR_MPL_SHIFT) | (0 << EHCI_QH_EPCHAR_NAK_RL_SHIFT);
+    qh->ep_caps = (1 << EHCI_QH_CAPS_MULT_SHIFT);
+    qh->current_qtd = 0;
+    qh->next_qtd = (uint32_t)(uintptr_t)td;
+    qh->alt_next_qtd = EHCI_LP_TERMINATE;
+    qh->token = 0;
+
+    qh->horiz_link = hc->async_head->horiz_link;
+    hc->async_head->horiz_link = (uint32_t)(uintptr_t)qh | EHCI_LP_TYPE_QH;
+
+    ehci_op_write(hc, EHCI_OP_USBCMD, ehci_op_read(hc, EHCI_OP_USBCMD) | EHCI_CMD_ASE);
+    int loops = EHCI_TIMEOUT_LOOPS;
+    while (loops-- && !(ehci_op_read(hc, EHCI_OP_USBSTS) & EHCI_STS_ASS)) {
+        asm volatile("pause");
+    }
+
+    int r = ehci_wait_qtd(td);
+    uint32_t tok = td->token;
+    int remaining = (tok >> 16) & 0x7FFF;
+    int actual = len - remaining;
+
+    hc->async_head->horiz_link = qh->horiz_link;
+
+    if (r != 0) return -1;
+
+    int packets = (actual > 0) ? ((actual + maxpkt - 1) / maxpkt) : 1;
+    *toggle = (*toggle ^ (packets & 1)) & 1;
+    return actual;
+}
+
 typedef struct {
     usb_device_t* dev;
     void (*callback)(usb_device_t*, uint8_t*, int);
@@ -313,6 +360,7 @@ usb_hcd_t* ehci_probe_and_init(uint32_t bar0_phys, void (*release_port_to_compan
 
     hc->hcd.control_transfer = ehci_do_control;
     hc->hcd.setup_interrupt_in = ehci_setup_interrupt_in;
+    hc->hcd.bulk_transfer = ehci_bulk_transfer;
     hc->hcd.priv = hc;
 
     klog_status("EHCI CONTROLLER STARTED", 0x00FF00);

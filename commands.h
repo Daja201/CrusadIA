@@ -15,4 +15,12 @@ void cmd_find(int argc, char** argv);
 void cmd_time(int argc, char** argv);
 void drives(void);
 void cmd_time(int argc, char** argv);
+void cmd_pumpon(int argc, char** argv);
+void cmd_pumpoff(int argc, char** argv);
+void cmd_pumpspeed(int argc, char** argv);
+void cmd_pumpfull(int argc, char** argv);
+void cmd_pumpstandby(int argc, char** argv);
+void cmd_pumptype(int argc, char** argv);
+void cmd_pumpcmd(int argc, char** argv);
+void cmd_blink(int argc, char** argv);
 #endif

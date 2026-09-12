@@ -82,6 +82,12 @@ typedef struct {
 
 #define USB_CLASS_HUB             0x09
 #define USB_CLASS_HID             0x03
+#define USB_CLASS_VENDOR          0xFF
+
+#define USB_EP_TYPE_MASK          0x03
+#define USB_EP_TYPE_BULK          0x02
+#define USB_EP_TYPE_INTERRUPT     0x03
+#define USB_EP_DIR_IN             0x80
 
 struct usb_hcd;
 
@@ -100,12 +106,18 @@ typedef struct usb_device {
     uint8_t ep_in_addr;
     uint16_t ep_in_maxpkt;
     uint8_t ep_in_interval;
+    uint8_t ep_out_addr;
+    uint16_t ep_out_maxpkt;
+    uint8_t bulk_in_toggle;
+    uint8_t bulk_out_toggle;
     void* hcd_priv;
+    void* driver_priv;
 } usb_device_t;
 
 typedef struct usb_hcd {
     int (*control_transfer)(struct usb_hcd* hcd, usb_device_t* dev, usb_setup_pkt_t* setup, void* buf, int len, int dir_in);
     int (*setup_interrupt_in)(struct usb_hcd* hcd, usb_device_t* dev, uint8_t ep_addr, uint16_t maxpkt, uint8_t interval, void (*callback)(usb_device_t*, uint8_t*, int));
+    int (*bulk_transfer)(struct usb_hcd* hcd, usb_device_t* dev, uint8_t ep_addr, void* buf, int len, int dir_in, int* toggle);
     void* priv;
 } usb_hcd_t;
 
@@ -113,6 +125,8 @@ void usb_init(void);
 usb_device_t* usb_alloc_device(usb_hcd_t* hcd);
 void usb_free_device(usb_device_t* dev);
 int usb_control_transfer(usb_device_t* dev, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue, uint16_t wIndex, void* buf, uint16_t wLength);
+int usb_bulk_write(usb_device_t* dev, const void* buf, int len);
+int usb_bulk_read(usb_device_t* dev, void* buf, int len);
 int usb_get_descriptor(usb_device_t* dev, uint8_t type, uint8_t index, void* buf, uint16_t len);
 int usb_set_address(usb_device_t* dev, int addr);
 int usb_set_configuration(usb_device_t* dev, int config);

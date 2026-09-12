@@ -5,19 +5,19 @@
 //initialize
 
 void init_serial() {
-    outb(PORT + 1, 0x00);
-    outb(PORT + 3, 0x80);
-    outb(PORT + 0, 0x03); 
-    outb(PORT + 1, 0x00); 
-    outb(PORT + 3, 0x03);
-    outb(PORT + 2, 0xC7); 
-    outb(PORT + 4, 0x0B); 
-    outb(PORT + 4, 0x1E); 
-    outb(PORT + 0, 0xAE);
-    if(inb(PORT + 0) != 0xAE) {
-       return;
-    }
-    outb(PORT + 4, 0x0F);
+   outb(PORT + 1, 0x00);
+   outb(PORT + 3, 0x80);
+   outb(PORT + 0, 0x03); 
+   outb(PORT + 1, 0x00); 
+   outb(PORT + 3, 0x03);
+   outb(PORT + 2, 0xC7); 
+   outb(PORT + 4, 0x0B); 
+   outb(PORT + 4, 0x1E); 
+   outb(PORT + 0, 0xAE);
+   if(inb(PORT + 0) != 0xAE) {
+      return;
+   }
+   outb(PORT + 4, 0x0F);
 }
 
 //receive
