@@ -1,3 +1,8 @@
+//DRIVER FOR COMMUNICATION WITH EDWARDS
+// *NEXT 400D*
+//TURBOMOLECULAR PUMP
+// SHOULD WORK
+
 #include "pump.h"
 #include "pl2303.h"
 #include "usb.h"

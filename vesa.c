@@ -129,6 +129,7 @@ void vesa_putpixel(int x, int y, uint32_t color) {
     }
 }
 
+//whole screen to color
 void vesa_clear(uint32_t color) {
     if (!vesa_ready) return;
     for (uint32_t y = 0; y < fb_height; y++) {
@@ -140,11 +141,13 @@ void vesa_clear(uint32_t color) {
     c_y = 0;
 }
 
+//swap framebuffer for backbuffer
 void vesa_swap(void) {
     if (!vesa_ready || !back) return;
     memcpy((void*)lfb, (void*)back, fb_height * fb_pitch);
 }
 
+// scrolls with framebuffer history
 void vesa_scroll(int lines) {
     if (!vesa_ready) return;
     if (lines <= 0) return;
@@ -165,9 +168,11 @@ void vesa_scroll(int lines) {
     }
 }
 
+//wrapper
 void vesa_draw_char(char c, int x, int y, uint32_t fg_color, uint32_t bg_color) {
     vesa_draw_char_34(c, x, y, fg_color, bg_color);
 }
+
 
 void vesa_print_char(char c) {
     if (!vesa_ready) return;

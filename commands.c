@@ -783,6 +783,10 @@ void cmd_usb(int argc, char** argv) {
     }
 }
 
+void cmd_showimage(){
+    //func for printing pixels based on my format
+} 
+
 void cmd_open(int argc, char** argv) {
     if (argc < 2) {
         kklogf("usage: open <file>\n");
@@ -796,6 +800,9 @@ void cmd_open(int argc, char** argv) {
         } 
         else if (strcmp(dot, ".txt") == 0) {
             cmd_read(argc, argv);
+        } 
+        else if (strcmp(dot, ".cim") == 0) {
+            cmd_showimage(argc, argv);
         } 
         else if (strcmp(dot, ".tpl") == 0) {
             templar_run_file(filename);
