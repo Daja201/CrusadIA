@@ -7,6 +7,7 @@
 #define HISTORY_SIZE 16
 #define ARROW_UP 1
 #define ARROW_DOWN 2
+#define ESC 3
 
 char cmd_buf[CMD_BUF_SIZE];
 int cmd_len = 0;
@@ -78,9 +79,15 @@ static void history_recall(int idx) {
 void terminal_key(char c) {
 
     if (screen_app_mode != 0) {
-        sac_x = 1;
-        sac_y = 1;
-        klogol(c);
+        char s[2] = { c, 0 };
+        sc_x = sac_x;
+        sc_y = sac_y;
+        klogol(s);
+        sac_x = sac_x + 8;
+        if (sac_x > 1920 - 8){
+            sac_x = 1;
+            sac_y = sac_y + 8;
+        }
         return;
     }
 
@@ -105,15 +112,24 @@ void terminal_key(char c) {
         return;
     }
 
+    if (c == ESC) {
+        if (screen_app_mode == 1) {
+            screen_appmode();
+        }
+        return;
+    }
+
     if (c == '\n') {
         cmd_buf[cmd_len] = 0;
         klog("\n");
         history_add(cmd_buf);
         execute_command(cmd_buf);
         cmd_len = 0;
-        klog_color("CRUSADER", 0xFFFF00);
-        klog_color(g_current_path, 0xFFA500);
-        klog_color(">> ", 0xFFFF00);
+        if (screen_app_mode == 0) {
+            klog_color("CRUSADER", 0xFFFF00);
+            klog_color(g_current_path, 0xFFA500);
+            klog_color(">> ", 0xFFFF00);
+        }
         return;
     }
 

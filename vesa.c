@@ -10,6 +10,8 @@ int c_x = 0;
 int c_y = 0;
 int sc_x = 0;
 int sc_y = 0;
+int capp_x = 0;
+int capp_y = 0;
 int vesa_ready = 0;
 int screen_app_mode = 0;
 
@@ -260,7 +262,13 @@ void mouse_draw() {
 }
 
 void screen_appmode() {
-    int screen_app_mode = 1;
+    if (screen_app_mode == 0){
+        screen_app_mode = 1;
+    } else {
+        screen_app_mode = 0;
+    }
+    capp_x = 1;
+    capp_y = 1;
 }
 
 // draws clock on top right

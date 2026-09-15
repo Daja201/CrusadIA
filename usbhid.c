@@ -61,6 +61,7 @@ static void usbhid_keyboard_report(usb_device_t* dev, uint8_t* report, int len) 
         if (already) continue;
         if (code == 0x4F) { terminal_key((char)2); usb_kbd_dirty = 1; continue; }
         if (code == 0x50) { terminal_key((char)1); usb_kbd_dirty = 1; continue; }
+        if (code == 0x27) { terminal_key((char)3); usb_kbd_dirty = 1; continue; }
         if (code < 104) {
             char c = shift ? hid_map_upper[code] : hid_map_lower[code];
             if (c != 0) {

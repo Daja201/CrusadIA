@@ -6,6 +6,8 @@ extern int c_x;
 extern int c_y;
 extern int sc_x;
 extern int sc_y;
+extern int capp_x;
+extern int capp_y;
 uint32_t Wwidth(void);
 uint32_t Hheight(void);
 void vesa_scroll(int lines);

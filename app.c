@@ -3,6 +3,7 @@
 #include "app.h"
 #include "string.h"
 #include "pmm.h"
+#include "terminal.h"
 
 void app(const char *app_name) {
     if (strcmp(app_name, "scriber") == 0) {
@@ -14,7 +15,9 @@ void app(const char *app_name) {
 }
 
 void app_scriber() {
-    //uint32_t addr = pmm_alloc_block(); //allocated space for file
+    uint32_t addr = pmm_alloc_block(); //allocated space for file
     vesa_clear(0X000000);
-    //screen_appmode();
+    screen_appmode();
+    sac_x = 1;
+    sac_y = 1;
 }
