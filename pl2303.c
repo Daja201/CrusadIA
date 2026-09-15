@@ -17,10 +17,10 @@
 #include "string.h"
 
 #define PL2303_VENDOR_REQUEST   0x01
-#define PL2303_VENDOR_WRITE_TYPE 0x40  /* host->device, vendor, device */
-#define PL2303_VENDOR_READ_TYPE  0xC0  /* device->host, vendor, device */
+#define PL2303_VENDOR_WRITE_TYPE 0x40
+#define PL2303_VENDOR_READ_TYPE  0xC0 
 
-#define PL2303_SET_LINE_TYPE    0x21   /* host->device, class, interface */
+#define PL2303_SET_LINE_TYPE    0x21
 #define PL2303_SET_LINE_REQUEST 0x20
 #define PL2303_SET_CONTROL_REQUEST 0x22
 #define PL2303_CTRL_DTR (1 << 0)
@@ -88,15 +88,12 @@ int pl2303_set_line(usb_device_t* dev, uint32_t baud, uint8_t databits, uint8_t 
     line[1] = (uint8_t)((baud >> 8) & 0xFF);
     line[2] = (uint8_t)((baud >> 16) & 0xFF);
     line[3] = (uint8_t)((baud >> 24) & 0xFF);
-    line[4] = stopbits; /* 0 = 1 stop bit, 1 = 1.5, 2 = 2 */
-    line[5] = parity;   /* 0 = none, 1 = odd, 2 = even */
-    line[6] = databits; /* 5,6,7,8 */
+    line[4] = stopbits;
+    line[5] = parity;
+    line[6] = databits;
     return usb_control_transfer(dev, PL2303_SET_LINE_TYPE, PL2303_SET_LINE_REQUEST, 0, 0, line, sizeof(line));
 }
 
-/* The magic register poke sequence every PL2303 needs after enumeration
-   before it will actually pass data. Values/order match the adapter's
-   documented type-0 (HX-family) init handshake. */
 static void pl2303_vendor_init(usb_device_t* dev) {
     uint8_t tmp;
     pl2303_vendor_read(dev, 0x8484, &tmp);
@@ -122,9 +119,7 @@ void pl2303_attach(usb_device_t* dev) {
 
     pl2303_vendor_init(dev);
 
-    /* nEXT pumps are fixed at 9600 baud, 8 data bits, 1 stop bit, no
-       parity - configure that as the power-on default so `pumpon`/
-       `pumpcmd` work immediately without extra setup. */
+    //PROB FIXED TO NEXT PUMPS
     pl2303_set_line(dev, 9600, 8, PL2303_PARITY_NONE, 0);
     pl2303_set_control_lines(dev, 1, 1);
 

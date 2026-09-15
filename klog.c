@@ -234,6 +234,48 @@ void klog(const char* msg) {
     cursor('d');
 }
 
+void klogol(const char* msg) {
+    while (*msg != '\0') {
+        char c = *msg;
+
+        if (c == '\n') {
+            cursor('e');
+            sc_x = 0;
+            sc_y += 8;
+        }
+        else if (c == '\b') {
+            cursor('e');
+            if (sc_x >= 8) {
+                sc_x -= 8;
+                vesa_draw_char_34(' ', sc_x, sc_y, 0x000000, 0x000000);
+            }
+            else if (c_y >= 8) {
+                sc_y -= 8;
+                sc_x = SCREEN_W - 8;
+                vesa_draw_char_34(' ', sc_x, sc_y, 0x000000, 0x000000);
+            }
+        }
+        else {
+            vesa_draw_char_34(c, sc_x, sc_y, 0xFFFFFF, 0x000000);
+            sc_x += 8;
+            if (sc_x >= SCREEN_W) {
+                sc_x = 0;
+                sc_y += 8;
+                vesa_draw_rec(sc_x, sc_y, 8, 8, 0x000000);
+            }
+        }
+
+        if (sc_y >= SCREEN_H) {
+            vesa_scroll(8);
+            sc_y -= 8;
+        }
+
+        msg++;
+    }
+    cursor('d');
+}
+
+
 void cursor(char func) {
     if (func == 'e' || func == 'l') {
         vesa_draw_rec(c_x, c_y, 8, 8, 0x000000);

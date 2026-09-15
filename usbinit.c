@@ -2,12 +2,8 @@
 #include "usb.h"
 #include "ohci.h"
 #include "ehci.h"
+#include "xhci.h"
 #include "klog.h"
-
-#define PCI_CLASS_SERIAL_BUS 0x0C
-#define PCI_SUBCLASS_USB     0x03
-#define PCI_PROGIF_OHCI      0x10
-#define PCI_PROGIF_EHCI      0x20
 
 void ehci_bios_handoff_pci(uint8_t bus, uint8_t dev, uint8_t func, uint32_t bar0_phys);
 
@@ -38,6 +34,16 @@ void usb_pci_init(void) {
             if (g_ohci_count < 8) {
                 g_ohci_devices[g_ohci_count++] = dev;
             }
+        } else if (progif == PCI_PROGIF_XHCI) {
+            uint32_t cmd = pci_config_read(dev.bus, dev.device, dev.function, 0x04);
+            cmd |= 0x06;
+            pci_config_write(dev.bus, dev.device, dev.function, 0x04, cmd);
+            uint32_t bar0 = dev.bar0 & ~0xF;
+            xhci_bios_handoff_pci(bar0);
+            klogf_color("usb: found xHCI controller at %d:%d.%d bar0=0x%x\n", 0x00FF00, dev.bus, dev.device, dev.function, bar0);
+            xhci_probe_and_init(dev.bus, dev.device, dev.function, bar0);
+        } else if (progif == PCI_PROGIF_UHCI) {
+            klogf_color("usb: found UHCI controller at %d:%d.%d (unsupported)\n", 0xFFFF00, dev.bus, dev.device, dev.function);
         }
         index++;
     }
@@ -56,5 +62,6 @@ void usb_pci_init(void) {
 void usb_poll_all(void) {
     ohci_poll_interrupts();
     ehci_poll_interrupts();
+    xhci_poll_interrupts();
     usb_poll();
 }

@@ -2,6 +2,7 @@
 #include "commands.h"
 #include "klog.h"
 #include "string.h"
+#include "vesa.h"
 
 #define HISTORY_SIZE 16
 #define ARROW_UP 1
@@ -10,6 +11,9 @@
 char cmd_buf[CMD_BUF_SIZE];
 int cmd_len = 0;
 char g_current_path[64] = "";
+
+int sac_x = 0;
+int sac_y = 0;
 
 static char cmd_history[HISTORY_SIZE][CMD_BUF_SIZE];
 static int history_count = 0;
@@ -72,6 +76,14 @@ static void history_recall(int idx) {
 }
 
 void terminal_key(char c) {
+
+    if (screen_app_mode != 0) {
+        sac_x = 1;
+        sac_y = 1;
+        klogol(c);
+        return;
+    }
+
     if (c == 0) return;
 
     if (c == ARROW_UP) {

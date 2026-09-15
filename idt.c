@@ -92,8 +92,8 @@ void init_idt() {
     outb(0xA1, 0x28);
     outb(0x21, 0x04);
     outb(0xA1, 0x02);
-    outb(0x21, 0x01);
-    outb(0xA1, 0x01);
+    outb(0x21, 0x01 & ~0x04);
+    outb(0xA1, 0x01 & ~0x10);
     outb(0x21, 0x0);
     outb(0xA1, 0x0);
     asm volatile("lidt %0" : : "m"(idt_ptr));
@@ -101,13 +101,9 @@ void init_idt() {
 
 void fault_handler(registers_t *regs) {
     if (regs->int_no >= 32 && regs->int_no <= 47) {
-        if (regs->int_no >= 40) {
-            outb(0xA0, 0x20);
-        }
+        if (regs->int_no >= 40) outb(0xA0, 0x20);
         outb(0x20, 0x20);
-        if (regs->int_no == 32) {
-            system_ticks++;
-        }
+        if (regs->int_no == 32) system_ticks++;
         return;
     }
     if (regs->int_no < 32) {

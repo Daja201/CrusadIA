@@ -4,24 +4,39 @@
 #include "font.h"
 #include <stdint.h>
 #include "string.h"
+#include "usbhid.h"
 
 int c_x = 0;
 int c_y = 0;
+int sc_x = 0;
+int sc_y = 0;
 int vesa_ready = 0;
+int screen_app_mode = 0;
+
 static volatile uint8_t *lfb = 0;
 static uint8_t *back = 0;
 static uint32_t fb_width = 0;
 static uint32_t fb_height = 0;
 static uint32_t fb_bpp = 0;
 static uint32_t fb_pitch = 0;
+static uint32_t mouse_under[5][5];
+static int mouse_prev_x = -1, mouse_prev_y = -1;
+static int mouse_has_saved = 0;
+
+uint32_t Wwidth(void)  { return fb_width; }
+uint32_t Hheight(void) { return fb_height; }
 
 void vesa_init_from_params(uint32_t phys_addr, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch) {
+    if (width == 0 || height == 0 || width > 8192 || height > 8192) {
+        width = 1920; height = 1080; bpp = 32; pitch = width * 4;
+    }
     lfb = (volatile uint8_t*)(uintptr_t)phys_addr;
     fb_width = width;
     fb_height = height;
     fb_bpp = bpp;
     fb_pitch = pitch ? pitch : (width * ((bpp + 7) / 8));
     back = (uint8_t *)0x800000;
+    pmm_deinit_region(0x800000, fb_pitch * fb_height);
     vesa_ready = 1;
 }
 
@@ -213,4 +228,55 @@ void vesa_draw_rec(int x, int y, int width, int height, uint32_t col ) {
             vesa_putpixel(x + c, y + d, col);
         }
     }
+}
+
+
+static uint32_t vesa_get_backpixel(int x, int y) {
+    if (x < 0 || (uint32_t)x >= fb_width || y < 0 || (uint32_t)y >= fb_height) return 0;
+    if (fb_bpp == 32) {
+        return *(uint32_t*)(back + y * fb_pitch + x * 4);
+    } else if (fb_bpp == 24) {
+        uint8_t *p = back + y * fb_pitch + x * 4;
+        return p[0] | (p[1] << 8) | (p[2] << 16);
+    }
+    return 0;
+}
+
+void mouse_draw() {
+    if (!vesa_ready) return;
+    if (mouse_has_saved) {
+        for (int dy = 0; dy < 5; dy++)
+            for (int dx = 0; dx < 5; dx++)
+                vesa_putpixel(mouse_prev_x + dx, mouse_prev_y + dy, mouse_under[dy][dx]);
+    }
+    for (int dy = 0; dy < 5; dy++)
+        for (int dx = 0; dx < 5; dx++)
+            mouse_under[dy][dx] = vesa_get_backpixel(mouse_x + dx, mouse_y + dy);
+
+    vesa_draw_rec(mouse_x, mouse_y, 5, 5, 0xFFFFFF);
+
+    mouse_prev_x = mouse_x;
+    mouse_prev_y = mouse_y;
+    mouse_has_saved = 1;
+}
+
+void screen_appmode() {
+    int screen_app_mode = 1;
+}
+
+clock_draw() {
+    if (!vesa_ready) return;
+    int year, month, day, hour, min, sec;
+    rtc_get_datetime(&year, &month, &day, &hour, &min, &sec);
+    char b[8];
+    sc_x = 1800;
+    sc_y = 9;
+    itoa(hour, b, 10);
+    klogol(b, 0x009000);
+    klogol(":", 0x009000);
+    itoa(min, b, 10);
+    klogol(b, 0x009000);
+    klogol(":", 0x009000);
+    itoa(sec, b, 10);
+    klogol(b, 0x009000);
 }

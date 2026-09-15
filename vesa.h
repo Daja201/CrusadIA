@@ -4,6 +4,10 @@
 extern int boot_has_fb;
 extern int c_x;
 extern int c_y;
+extern int sc_x;
+extern int sc_y;
+uint32_t Wwidth(void);
+uint32_t Hheight(void);
 void vesa_scroll(int lines);
 void vesa_init_from_params(uint32_t phys_addr, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch);
 void vesa_putpixel(int x, int y, uint32_t color);
@@ -19,4 +23,5 @@ void vesa_draw_ver(int x, int y, int a, uint32_t col );
 void vesa_draw_rec(int x, int y, int width, int height, uint32_t col );
 void vesa_draw_hor(int x, int y, int a, uint32_t col );
 extern int vesa_ready;
+extern int screen_app_mode;
 #endif

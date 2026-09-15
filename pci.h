@@ -14,6 +14,13 @@ typedef struct {
     uint32_t bar1;
 } pci_device_t;
 
+#define PCI_CLASS_SERIAL_BUS 0x0C
+#define PCI_SUBCLASS_USB     0x03
+#define PCI_PROGIF_UHCI      0x00
+#define PCI_PROGIF_OHCI      0x10
+#define PCI_PROGIF_EHCI      0x20
+#define PCI_PROGIF_XHCI      0x30
+
 uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 void pci_config_write(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 int pci_find_class(uint8_t class_code, uint8_t subclass, pci_device_t* out, int index);

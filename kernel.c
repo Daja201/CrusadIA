@@ -13,6 +13,7 @@
 #include "ac97.h"
 #include "usb.h"
 #include "serial.h"
+#include "usbhid.h"
 
 //initializes pci and searches for usb devices
 void usb_pci_init(void);
@@ -37,13 +38,20 @@ void system_main_task() {
             usb_kbd_dirty = 0;
             needs_redraw = 1;
         }
+        if (mouse_dirty != 0) { //check for queued mousestrokes
+            mouse_dirty  = 0;
+            needs_redraw = 1;
+        }
         int y, m, d, h, min, sec;
         rtc_get_datetime(&y, &m, &d, &h, &min, &sec); //just upadtes data from rtc
         if (sec != last_sec) { //every second -> +1 last_sec
             last_sec = sec;
+            needs_redraw = 1;
         }
         if (needs_redraw) { //redraws if any of the before ifs swithced needs redraw (like new char from queqe)
             cursor('d');
+            mouse_draw();
+            clock_draw();
             vesa_swap();
         }
         asm volatile("pause"); //cpu hint instr for x86 that waits a bit and doesnt use that much power(higher perf)
@@ -74,6 +82,7 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     usb_pci_init();
     klog_status("USB OK", 0x00FF00);
     char *argv[] = { (char*)"time", NULL };
+    klog_color("boot time:", 0x00FF00);
     cmd_time(1, argv);
     klog("\n");
     klog_color("CRUSADER>> ", 0xFFFF00);
@@ -82,5 +91,6 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     asm volatile("sti");
     while (1) {
         asm volatile("hlt");
+ 
     }
 }

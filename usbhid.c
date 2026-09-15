@@ -2,12 +2,17 @@
 #include "usb.h"
 #include "terminal.h"
 #include "klog.h"
+#include "io.h"
 
 #define HID_SUBCLASS_BOOT 1
 #define HID_PROTO_KEYBOARD 1
 #define HID_PROTO_MOUSE 2
 #define HID_RAW_MAX_DEVICES 4
 #define HID_RAW_BUF_LEN 64
+
+volatile int mouse_x = 640, mouse_y = 360;
+volatile int mouse_dirty = 0;
+volatile uint8_t mouse_buttons = 0;
 
 typedef struct {
     usb_device_t* dev;
@@ -69,11 +74,23 @@ static void usbhid_keyboard_report(usb_device_t* dev, uint8_t* report, int len) 
 }
 
 static void usbhid_mouse_report(usb_device_t* dev, uint8_t* report, int len) {
-    if (len < 3) return;
+    if (len != 3 && len != 4) return;
+    uint8_t buttons = report[0];
     int8_t dx = (int8_t)report[1];
     int8_t dy = (int8_t)report[2];
-    (void)dx;
-    (void)dy;
+
+    mouse_x += dx;
+    mouse_y += dy;
+
+    int max_x = Wwidth() - 1;
+    int max_y = Hheight() - 1;
+    if (mouse_x < 0) mouse_x = 0;
+    if (mouse_y < 0) mouse_y = 0;
+    if (mouse_x > max_x) mouse_x = max_x;
+    if (mouse_y > max_y) mouse_y = max_y;
+
+    mouse_buttons = buttons & 0x07;
+    mouse_dirty = 1;
 }
 
 static void usbhid_raw_report(usb_device_t* dev, uint8_t* report, int len) {
@@ -133,7 +150,7 @@ void usbhid_attach(usb_device_t* dev) {
         return;
     }
 
-    if (dev->iface_subclass == HID_SUBCLASS_BOOT) {
+    if (dev->iface_protocol == HID_PROTO_KEYBOARD || dev->iface_protocol == HID_PROTO_MOUSE) {
         usb_control_transfer(dev, 0x21, USB_REQ_SET_PROTOCOL, 0, 0, 0, 0);
         usb_control_transfer(dev, 0x21, USB_REQ_SET_IDLE, 0, 0, 0, 0);
 
@@ -142,7 +159,7 @@ void usbhid_attach(usb_device_t* dev) {
             dev->hcd->setup_interrupt_in(dev->hcd, dev, dev->ep_in_addr, dev->ep_in_maxpkt, dev->ep_in_interval, usbhid_keyboard_report);
             klog_status("USB KEYBOARD READY", 0x00FF00);
             return;
-        } else if (dev->iface_protocol == HID_PROTO_MOUSE) {
+        } else {
             dev->hcd->setup_interrupt_in(dev->hcd, dev, dev->ep_in_addr, dev->ep_in_maxpkt, dev->ep_in_interval, usbhid_mouse_report);
             klog_status("USB MOUSE READY", 0x00FF00);
             return;

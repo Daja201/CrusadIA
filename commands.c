@@ -935,6 +935,14 @@ void cmd_blink(int argc, char** argv) {
 
 }
 
+void cmd_debug() {
+    vesa_clear(0x000000);
+    klog("MOUSE X:");
+    kklogf("%d", mouse_x);
+    klog("MOUSE Y:");
+    kklogf("%d", mouse_y);
+}
+
 command_t commands[] = {
     {"help", cmd_help},
     {"clear", cmd_clear},
@@ -975,6 +983,7 @@ command_t commands[] = {
     {"pumptype", cmd_pumptype},
     {"pumpcmd", cmd_pumpcmd},
     {"blink", cmd_blink},
+    {"debug", cmd_debug},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);

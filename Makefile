@@ -71,7 +71,9 @@ run:
 		$(QEMU_AUDIO) -device ac97,audiodev=snd0 \
 		-device pci-ohci,id=ohci \
 		-device usb-ehci,id=ehci \
-		-device usb-kbd,bus=ohci.0 \
+		-device qemu-xhci,id=xhci \
+		-device usb-kbd,bus=xhci.0 \
+		-device usb-mouse,bus=ohci.0 \
 		-m 8G -vga std -serial stdio $(QEMU_ACCEL) \
 		-device usb-host,vendorid=0x067b,productid=0x23a3,bus=ohci.0 \
 		$(QEMU_DISPLAY) \
