@@ -94,8 +94,6 @@ static void usb_parse_config(usb_device_t* dev, uint8_t* cfgbuf, int total_len) 
                 dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
                 dev->ep_in_interval = ed->bInterval ? ed->bInterval : 10;
             } else if (dev->ep_in_addr == 0 && ep_type == USB_EP_TYPE_BULK && is_in) {
-                /* Vendor-specific serial adapters (PL2303 etc.) have no interrupt-IN
-                   data endpoint; their bulk-IN endpoint is stored here instead. */
                 dev->ep_in_addr = ed->bEndpointAddress;
                 dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
                 dev->ep_in_interval = 0;

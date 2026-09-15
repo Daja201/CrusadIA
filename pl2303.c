@@ -11,6 +11,7 @@
  * the communication interface) follow the well documented PL2303 wire
  * protocol used by every open-source PL2303 driver.
  */
+
 #include "pl2303.h"
 #include "usb.h"
 #include "klog.h"

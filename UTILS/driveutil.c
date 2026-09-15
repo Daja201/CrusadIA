@@ -91,7 +91,7 @@ static void block_read(uint32_t lba, uint8_t *buf) {
     if (lseek(g_fd, off, SEEK_SET) < 0) die("seek failed (read)");
     ssize_t n = read(g_fd, buf, SECTOR_SIZE);
     if (n < 0) die("read failed");
-    if (n < SECTOR_SIZE) memset(buf + n, 0, SECTOR_SIZE - n); /* past EOF */
+    if (n < SECTOR_SIZE) memset(buf + n, 0, SECTOR_SIZE - n);
 }
 
 static void block_write(uint32_t lba, const uint8_t *buf) {

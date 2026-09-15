@@ -23,9 +23,11 @@ static uint32_t mouse_under[5][5];
 static int mouse_prev_x = -1, mouse_prev_y = -1;
 static int mouse_has_saved = 0;
 
+// reports screen size from bootloader
 uint32_t Wwidth(void)  { return fb_width; }
 uint32_t Hheight(void) { return fb_height; }
 
+// initializes memory part for vesa buffers
 void vesa_init_from_params(uint32_t phys_addr, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch) {
     if (width == 0 || height == 0 || width > 8192 || height > 8192) {
         width = 1920; height = 1080; bpp = 32; pitch = width * 4;
@@ -40,6 +42,7 @@ void vesa_init_from_params(uint32_t phys_addr, uint32_t width, uint32_t height, 
     vesa_ready = 1;
 }
 
+// 
 static void *vesa_memmove(void *dst, const void *src, uint32_t n) {
     uint8_t *d = (uint8_t*)dst;
     const uint8_t *s = (const uint8_t*)src;
@@ -52,6 +55,7 @@ static void *vesa_memmove(void *dst, const void *src, uint32_t n) {
     return dst;
 }
 
+// puts pixel on coordinates with 32bit colour
 static inline void put_pixel_32(int x, int y, uint32_t color) {
     if (x < 0 || (uint32_t)x >= fb_width || y < 0 || (uint32_t)y >= fb_height) return;
     uint32_t offset = (y * fb_pitch) + (x * (fb_bpp / 8));
@@ -60,6 +64,7 @@ static inline void put_pixel_32(int x, int y, uint32_t color) {
     *p = color;
 }
 
+// 
 void vesa_draw_char_34(char c, int x, int y, uint32_t fg_color, uint32_t bg_color) {
     if (!vesa_ready) return;
     if (c < 0 || c > 127) return;
@@ -161,18 +166,7 @@ void vesa_scroll(int lines) {
 }
 
 void vesa_draw_char(char c, int x, int y, uint32_t fg_color, uint32_t bg_color) {
-    if (c < 0 || c > 127) return;
-    const unsigned char *glyph = font8x8_basic[(int)c];
-    for (int cy = 0; cy < 8; cy++) {
-        unsigned char row = glyph[cy];
-        for (int cx = 0; cx < 8; cx++) {
-            if (row & (1 << cx)) {
-                vesa_putpixel(x + cx, y + cy, fg_color);
-            } else {
-                vesa_putpixel(x + cx, y + cy, bg_color);
-            }
-        }
-    }
+    vesa_draw_char_34(c, x, y, fg_color, bg_color);
 }
 
 void vesa_print_char(char c) {
@@ -264,6 +258,7 @@ void screen_appmode() {
     int screen_app_mode = 1;
 }
 
+// draws clock on top right
 clock_draw() {
     if (!vesa_ready) return;
     int year, month, day, hour, min, sec;
