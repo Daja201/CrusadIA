@@ -26,4 +26,5 @@ void vesa_draw_rec(int x, int y, int width, int height, uint32_t col );
 void vesa_draw_hor(int x, int y, int a, uint32_t col );
 extern int vesa_ready;
 extern int screen_app_mode;
+void screen_appmode(void);
 #endif

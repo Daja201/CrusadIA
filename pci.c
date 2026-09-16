@@ -45,8 +45,13 @@ int pci_find_class(uint8_t class_code, uint8_t subclass, pci_device_t* out, int 
                         out->device_id = (v >> 16) & 0xFFFF;
                         out->class_code = cls_code;
                         out->subclass = sc;
-                        uint32_t bar0 = pci_config_read(bus, dev, func, 0x10);
-                        out->bar0 = bar0;
+                        uint32_t bar0_lo = pci_config_read(bus, dev, func, 0x10);
+                        uint64_t bar_phys = bar0_lo & ~0xFu;
+                        if (((bar0_lo >> 1) & 0x3) == 2) {
+                            uint32_t bar1 = pci_config_read(bus, dev, func, 0x14);
+                            bar_phys |= ((uint64_t)bar1) << 32;
+                        }
+                        out->bar0 = (uint32_t)bar_phys;
                         return 0;
                     }
                     found++;

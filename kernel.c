@@ -50,8 +50,10 @@ void system_main_task() {
         }
         if (needs_redraw) { //redraws if any of the before ifs swithced needs redraw (like new char from queqe)
             cursor('d');
-            mouse_draw();
-            clock_draw();
+            if (screen_app_mode == 0) {
+                mouse_draw();
+                clock_draw();
+            }
             vesa_swap();
         }
         asm volatile("pause"); //cpu hint instr for x86 that waits a bit and doesnt use that much power(higher perf)

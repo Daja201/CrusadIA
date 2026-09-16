@@ -267,6 +267,7 @@ void screen_appmode() {
     } else {
         screen_app_mode = 0;
     }
+    mouse_has_saved = 0;
     capp_x = 1;
     capp_y = 1;
 }

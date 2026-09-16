@@ -38,10 +38,14 @@ void usb_pci_init(void) {
             uint32_t cmd = pci_config_read(dev.bus, dev.device, dev.function, 0x04);
             cmd |= 0x06;
             pci_config_write(dev.bus, dev.device, dev.function, 0x04, cmd);
-            uint32_t bar0 = dev.bar0 & ~0xF;
-            xhci_bios_handoff_pci(bar0);
-            klogf_color("usb: found xHCI controller at %d:%d.%d bar0=0x%x\n", 0x00FF00, dev.bus, dev.device, dev.function, bar0);
-            xhci_probe_and_init(dev.bus, dev.device, dev.function, bar0);
+            uint32_t bar0_lo = pci_config_read(dev.bus, dev.device, dev.function, 0x10);
+            uint64_t bar_phys = bar0_lo & ~0xFu;
+            if (((bar0_lo >> 1) & 0x3) == 2) {
+                uint32_t bar1 = pci_config_read(dev.bus, dev.device, dev.function, 0x14);
+                bar_phys |= ((uint64_t)bar1) << 32;
+            }
+            klogf_color("usb: found xHCI controller at %d:%d.%d bar0=0x%x\n", 0x00FF00, dev.bus, dev.device, dev.function, (uint32_t)bar_phys);
+            xhci_probe_and_init(dev.bus, dev.device, dev.function, (uint32_t)bar_phys);
         } else if (progif == PCI_PROGIF_UHCI) {
             klogf_color("usb: found UHCI controller at %d:%d.%d (unsupported)\n", 0xFFFF00, dev.bus, dev.device, dev.function);
         }
