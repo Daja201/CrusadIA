@@ -1,17 +1,3 @@
-/* Prolific PL2303 USB<->RS232 bridge driver.
- *
- * Tested against: Bus 001 Device 010: ID 067b:23a3 Prolific Technology,
- * Inc. ATEN Serial Bridge cable (a PL2303-based dongle sold under ATEN's
- * own PID). The interface is vendor-specific (bInterfaceClass 0xFF) with
- * one bulk-IN, one bulk-OUT and (on most units) one interrupt-IN endpoint
- * for modem status - we only need the two bulk endpoints for raw data.
- *
- * Vendor requests (bRequest 0x01 read/write of internal registers, plus
- * the CDC-style SET_LINE_CODING/SET_CONTROL_LINE_STATE class requests on
- * the communication interface) follow the well documented PL2303 wire
- * protocol used by every open-source PL2303 driver.
- */
-
 #include "pl2303.h"
 #include "usb.h"
 #include "klog.h"
