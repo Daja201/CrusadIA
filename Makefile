@@ -20,7 +20,8 @@ else
 endif
 
 NASM_FLAGS = -f elf32
-CFLAGS = -m32 -ffreestanding -c -fno-builtin
+GCC_INC := $(shell $(CC) -m32 -print-file-name=include)
+CFLAGS = -m32 -ffreestanding -c -fno-builtin -nostdinc -isystem $(GCC_INC) -I.
 LD_FLAGS = -m elf_i386 -T link.ld
 
 C_SRC := $(wildcard *.c)

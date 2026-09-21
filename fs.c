@@ -6,6 +6,9 @@
 #include "io.h"
 #include "terminal.h"
 #include "heap.h"
+#include "fcntl.h"
+#include "unistd.h"
+#include "sys/stat.h"
 
 #define ATA_PRIMARY 0x1F0
 #define ATA_SECONDARY 0x170
@@ -860,5 +863,94 @@ int fs_cd(const char* name) {
     read_inode(target_idx, &target);
     if (target.type != 2) return -2; 
     g_current_dir = (uint32_t)target_idx;
+    return 0;
+}
+#define MAX_OPEN_FDS 32
+static FILE* fd_table[MAX_OPEN_FDS];
+
+static int fd_alloc(FILE* f) {
+    for (int i = 0; i < MAX_OPEN_FDS; i++) {
+        if (!fd_table[i]) {
+            fd_table[i] = f;
+            return i;
+        }
+    }
+    return -1;
+}
+
+int open(const char* path, int flags, ...) {
+    const char* mode;
+    if (flags & O_TRUNC) {
+        mode = "w";
+    } else if (flags & O_APPEND) {
+        mode = "a";
+    } else if (flags & (O_WRONLY | O_RDWR)) {
+        mode = (flags & O_CREAT) ? "w+" : "r+";
+    } else {
+        mode = "r";
+    }
+
+    FILE* f = fopen(path, mode);
+    if (!f) return -1;
+
+    int fd = fd_alloc(f);
+    if (fd < 0) {
+        fclose(f);
+        return -1;
+    }
+    return fd;
+}
+
+int close(int fd) {
+    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
+    fclose(fd_table[fd]);
+    fd_table[fd] = 0;
+    return 0;
+}
+
+long read(int fd, void* buf, size_t count) {
+    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
+    return (long)fread(buf, 1, count, fd_table[fd]);
+}
+
+long write(int fd, const void* buf, size_t count) {
+    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
+    return (long)fwrite(buf, 1, count, fd_table[fd]);
+}
+
+long lseek(int fd, long offset, int whence) {
+    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
+    if (fseek(fd_table[fd], offset, whence) < 0) return -1;
+    return ftell(fd_table[fd]);
+}
+
+int unlink(const char* path) {
+    return fs_delete_file(path) < 0 ? -1 : 0;
+}
+
+char* getcwd(char* buf, size_t size) {
+    if (!buf || size < 2) return 0;
+    buf[0] = '/';
+    buf[1] = '\0';
+    return buf;
+}
+
+int fstat(int fd, struct stat* st) {
+    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd] || !st) return -1;
+    st->st_size = fd_table[fd]->node.size;
+    st->st_mode = (fd_table[fd]->node.type == 2) ? S_IFDIR : S_IFREG;
+    return 0;
+}
+
+int stat(const char* path, struct stat* st) {
+    if (!st) return -1;
+    inode_t dir;
+    read_inode(g_current_dir, &dir);
+    int idx = dir_lookup(&dir, path);
+    if (idx < 0) return -1;
+    inode_t node;
+    read_inode(idx, &node);
+    st->st_size = node.size;
+    st->st_mode = (node.type == 2) ? S_IFDIR : S_IFREG;
     return 0;
 }
