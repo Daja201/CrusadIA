@@ -23,8 +23,6 @@ void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
     uint8_t *mb_bytes = (uint8_t*)mb;
 
     pmm_init();
-    pmm_deinit_region(0x0, 0x100000);
-    pmm_deinit_region(0x100000, 0x400000);
 
     if (flags & (1 << 6)) {
         uint32_t mmap_length = *(uint32_t*)(mb_bytes + 44);
@@ -48,6 +46,8 @@ void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
             
             current_addr += size + 4;
         }
+        pmm_deinit_region(0x0, 0x100000);
+        pmm_deinit_region(0x100000, 0x400000);
     } else {
         klog("WARNING: No memory map provided by GRUB!\n");
     }

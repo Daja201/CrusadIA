@@ -20,7 +20,6 @@
 #include "fat32.h"
 #include "usb.h"
 #include "usbhid.h"
-#include "templar.h"
 #include "pl2303.h"
 #include "pump.h"
 
@@ -249,7 +248,7 @@ void cmd_read_custom(int argc, char** argv) {
     }
     inode_t file_node;
     read_inode(inode_num, &file_node);
-    uint8_t buf[32768];
+    static uint8_t buf[32768];
     uint32_t to_read = file_node.size;
     if (to_read > sizeof(buf)) {
         to_read = sizeof(buf);
@@ -803,9 +802,6 @@ void cmd_open(int argc, char** argv) {
         } 
         else if (strcmp(dot, ".cim") == 0) {
             cmd_showimage(argc, argv);
-        } 
-        else if (strcmp(dot, ".tpl") == 0) {
-            templar_run_file(filename);
         } 
         else {
             klog_status("UNKNOWN EXTENSION", 0xFF0000);

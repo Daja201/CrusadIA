@@ -286,6 +286,11 @@ clock_draw() {
     itoa(min, b, 10);
     klogol(b, 0x009000);
     klogol(":", 0x009000);
-    itoa(sec, b, 10);
+    if(sec < 10){
+        b[0] = '0';
+        itoa(sec, b + 1, 10);
+    } else {
+        itoa(sec, b, 10);   
+    }
     klogol(b, 0x009000);
 }

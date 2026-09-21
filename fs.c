@@ -723,7 +723,7 @@ uint32_t fs_create_file(const char* name, const char* main_tag) {
     write_inode(idx, &node);
     inode_t root;
     read_inode(g_current_dir, &root);
-    dir_add(0, &root, name, (uint32_t)idx);
+    dir_add(g_current_dir, &root, name, (uint32_t)idx);
     return (uint32_t)idx;
 }
 

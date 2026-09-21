@@ -2,11 +2,13 @@
 #include <stdint.h>
 #include "pmm.h"
 
+#define TASK_STACK_SIZE 16384
 #define MAX_TASKS 16
 extern volatile uint32_t system_ticks;
 task_t tasks[MAX_TASKS];
 int current_task = -1;
 int num_tasks = 0;
+static uint8_t task_stacks[MAX_TASKS][TASK_STACK_SIZE] __attribute__((aligned(16)));
 
 static inline void outb(uint16_t port, uint8_t val) {
     asm volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
@@ -62,7 +64,7 @@ void create_task(void (*entry_point)(), uint32_t priority) {
     if (num_tasks >= MAX_TASKS) return;
     void* stack_mem = pmm_alloc_block(); 
     if (!stack_mem) return;
-    uint32_t *stack = (uint32_t *)((uint32_t)stack_mem + 4096);
+    uint32_t *stack = (uint32_t *)(task_stacks[num_tasks] + TASK_STACK_SIZE);
     *(--stack) = (uint32_t)task_exit;
     *(--stack) = 0x0202;                
     *(--stack) = 0x10;          
