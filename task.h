@@ -17,6 +17,7 @@ typedef struct {
     uint32_t priority;
 } task_t;
 void create_task(void (*entry_point)(), uint32_t priority);
+void task_exit(void);
 uint32_t schedule_handler(uint32_t esp);
 void init_multitasking();
 #endif

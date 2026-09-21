@@ -1,5 +1,7 @@
 #include "string.h"
 #include "stdint.h"
+#include "heap.h"
+#include "task.h"
 
 //compares 2 strings by ASCII character valuables 
 int strcmp(const char* a, const char* b) {
@@ -196,4 +198,165 @@ int strcasecmp(const char* a, const char* b) {
         a++; b++;
     }
     return (unsigned char)tolower(*a) - (unsigned char)tolower(*b);
+}
+
+char* strdup(const char* s) {
+    if (!s) return 0;
+    size_t len = strlen(s) + 1;
+    char* out = (char*)malloc(len);
+    if (!out) return 0;
+    memcpy(out, s, len);
+    return out;
+}
+
+char* strchr(const char* s, int c) {
+    while (*s) {
+        if (*s == (char)c) return (char*)s;
+        s++;
+    }
+    return (c == 0) ? (char*)s : 0;
+}
+
+char* strstr(const char* haystack, const char* needle) {
+    if (!*needle) return (char*)haystack;
+    for (; *haystack; haystack++) {
+        const char* h = haystack;
+        const char* n = needle;
+        while (*h && *n && *h == *n) { h++; n++; }
+        if (!*n) return (char*)haystack;
+    }
+    return 0;
+}
+
+int strncmp(const char* a, const char* b, size_t n) {
+    while (n && *a && (*a == *b)) {
+        a++; b++; n--;
+    }
+    if (n == 0) return 0;
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+void qsort(void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*)) {
+    uint8_t* arr = (uint8_t*)base;
+    for (size_t i = 1; i < nmemb; i++) {
+        size_t j = i;
+        while (j > 0) {
+            void* a = arr + (j - 1) * size;
+            void* b = arr + j * size;
+            if (compar(a, b) <= 0) break;
+            for (size_t k = 0; k < size; k++) {
+                uint8_t tmp = ((uint8_t*)a)[k];
+                ((uint8_t*)a)[k] = ((uint8_t*)b)[k];
+                ((uint8_t*)b)[k] = tmp;
+            }
+            j--;
+        }
+    }
+}
+
+void* bsearch(const void* key, const void* base, size_t nmemb, size_t size, int (*compar)(const void*, const void*)) {
+    const uint8_t* arr = (const uint8_t*)base;
+    size_t lo = 0, hi = nmemb;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        const void* elem = arr + mid * size;
+        int cmp = compar(key, elem);
+        if (cmp == 0) return (void*)elem;
+        if (cmp < 0) hi = mid;
+        else lo = mid + 1;
+    }
+    return 0;
+}
+
+int abs(int n) {
+    return n < 0 ? -n : n;
+}
+
+void exit(int code) {
+    (void)code;
+    task_exit();
+}
+
+void abort(void) {
+    task_exit();
+}
+
+static void vsnprintf_put(char* buf, size_t size, size_t* pos, char c) {
+    if (*pos + 1 < size) buf[*pos] = c;
+    (*pos)++;
+}
+
+static void vsnprintf_puts(char* buf, size_t size, size_t* pos, const char* s) {
+    while (*s) vsnprintf_put(buf, size, pos, *s++);
+}
+
+int vsnprintf(char* buf, size_t size, const char* fmt, va_list args) {
+    size_t pos = 0;
+    char numbuf[32];
+    for (size_t i = 0; fmt[i] != '\0'; i++) {
+        if (fmt[i] != '%') {
+            vsnprintf_put(buf, size, &pos, fmt[i]);
+            continue;
+        }
+        i++;
+        int is_long = 0;
+        if (fmt[i] == 'l') { is_long = 1; i++; }
+        switch (fmt[i]) {
+            case 'd': {
+                long val = is_long ? va_arg(args, long) : (long)va_arg(args, int);
+                itoa((int)val, numbuf, 10);
+                vsnprintf_puts(buf, size, &pos, numbuf);
+                break;
+            }
+            case 'u': {
+                unsigned long val = is_long ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
+                char tmp[32];
+                int idx = 0;
+                if (val == 0) tmp[idx++] = '0';
+                while (val) { tmp[idx++] = '0' + (val % 10); val /= 10; }
+                while (idx > 0) vsnprintf_put(buf, size, &pos, tmp[--idx]);
+                break;
+            }
+            case 'x': {
+                unsigned long val = is_long ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
+                itoa((int)val, numbuf, 16);
+                vsnprintf_puts(buf, size, &pos, numbuf);
+                break;
+            }
+            case 'p': {
+                unsigned long val = (unsigned long)va_arg(args, void*);
+                vsnprintf_puts(buf, size, &pos, "0x");
+                itoa((int)val, numbuf, 16);
+                vsnprintf_puts(buf, size, &pos, numbuf);
+                break;
+            }
+            case 's': {
+                char* s = va_arg(args, char*);
+                vsnprintf_puts(buf, size, &pos, s ? s : "(null)");
+                break;
+            }
+            case 'c': {
+                char c = (char)va_arg(args, int);
+                vsnprintf_put(buf, size, &pos, c);
+                break;
+            }
+            case '%':
+                vsnprintf_put(buf, size, &pos, '%');
+                break;
+            default:
+                vsnprintf_put(buf, size, &pos, '%');
+                vsnprintf_put(buf, size, &pos, fmt[i]);
+                break;
+        }
+    }
+    if (size > 0) buf[pos < size ? pos : size - 1] = '\0';
+    return (int)pos;
+}
+
+int snprintf(char* buf, size_t size, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    int ret = vsnprintf(buf, size, fmt, args);
+    va_end(args);
+    return ret;
 }

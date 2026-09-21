@@ -5,6 +5,7 @@
 #include "string.h"
 #include "io.h"
 #include "terminal.h"
+#include "heap.h"
 
 #define ATA_PRIMARY 0x1F0
 #define ATA_SECONDARY 0x170
@@ -757,6 +758,93 @@ int fs_resolve_path(const char* path, uint32_t current_dir_inode) {
     inode_t dir;
     read_inode(current_dir_inode, &dir);
     return dir_lookup(&dir, path);
+}
+
+FILE* fopen(const char* path, const char* mode) {
+    int writable = (strchr(mode, 'w') != 0) || (strchr(mode, 'a') != 0) || (strchr(mode, '+') != 0);
+    int creating = (strchr(mode, 'w') != 0);
+
+    inode_t dir;
+    read_inode(g_current_dir, &dir);
+    int inode_num = dir_lookup(&dir, path);
+
+    if (inode_num < 0) {
+        if (!writable) return 0;
+        uint32_t created = fs_create_file(path, "tcc");
+        if ((int32_t)created < 0) return 0;
+        inode_num = (int)created;
+    } else if (creating) {
+        fs_delete_file(path);
+        uint32_t created = fs_create_file(path, "tcc");
+        if ((int32_t)created < 0) return 0;
+        inode_num = (int)created;
+    }
+
+    FILE* f = (FILE*)malloc(sizeof(FILE));
+    if (!f) return 0;
+    f->inode_idx = (uint32_t)inode_num;
+    read_inode(inode_num, &f->node);
+    f->pos = 0;
+    f->eof = 0;
+    f->writable = writable;
+
+    if (mode[0] == 'a') f->pos = f->node.size;
+
+    return f;
+}
+
+size_t fread(void* ptr, size_t size, size_t nmemb, FILE* f) {
+    if (!f || size == 0 || nmemb == 0) return 0;
+    uint32_t want = (uint32_t)(size * nmemb);
+    uint32_t got = fs_read(f->inode_idx, &f->node, f->pos, want, (uint8_t*)ptr);
+    if ((int32_t)got <= 0) {
+        f->eof = 1;
+        return 0;
+    }
+    f->pos += got;
+    if (got < want) f->eof = 1;
+    return got / size;
+}
+
+size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* f) {
+    if (!f || !f->writable || size == 0 || nmemb == 0) return 0;
+    uint32_t want = (uint32_t)(size * nmemb);
+    int written = fs_write(f->inode_idx, f->pos, (const uint8_t*)ptr, want);
+    if (written < 0) return 0;
+    f->pos += (uint32_t)written;
+    read_inode(f->inode_idx, &f->node);
+    return (size_t)written / size;
+}
+
+int fclose(FILE* f) {
+    if (!f) return -1;
+    free(f);
+    return 0;
+}
+
+int fseek(FILE* f, long offset, int whence) {
+    if (!f) return -1;
+    long base = 0;
+    if (whence == SEEK_SET) base = 0;
+    else if (whence == SEEK_CUR) base = (long)f->pos;
+    else if (whence == SEEK_END) base = (long)f->node.size;
+    else return -1;
+
+    long target = base + offset;
+    if (target < 0) return -1;
+    f->pos = (uint32_t)target;
+    f->eof = 0;
+    return 0;
+}
+
+long ftell(FILE* f) {
+    if (!f) return -1;
+    return (long)f->pos;
+}
+
+int feof(FILE* f) {
+    if (!f) return 1;
+    return f->eof;
 }
 
 int fs_cd(const char* name) {

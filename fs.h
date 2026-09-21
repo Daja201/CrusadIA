@@ -75,4 +75,25 @@ void qformat_fs(void);
 void create_defdirs(void);
 int fs_find_by_tag(const char* tag, uint32_t* results, int max_results);
 void drives(void);
+
+#define SEEK_SET 0
+#define SEEK_CUR 1
+#define SEEK_END 2
+
+typedef struct {
+    uint32_t inode_idx;
+    inode_t node;
+    uint32_t pos;
+    int eof;
+    int writable;
+} FILE;
+
+FILE* fopen(const char* path, const char* mode);
+size_t fread(void* ptr, size_t size, size_t nmemb, FILE* f);
+size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* f);
+int fclose(FILE* f);
+int fseek(FILE* f, long offset, int whence);
+long ftell(FILE* f);
+int feof(FILE* f);
+
 #endif
