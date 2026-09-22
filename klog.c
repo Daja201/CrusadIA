@@ -234,7 +234,7 @@ void klog(const char* msg) {
     cursor('d');
 }
 
-void klogol(const char* msg) {
+void klogol(const char* msg, uint32_t color) {
     while (*msg != '\0') {
         char c = *msg;
 
@@ -256,7 +256,7 @@ void klogol(const char* msg) {
             }
         }
         else {
-            vesa_draw_char_34(c, sc_x, sc_y, 0xFFFFFF, 0x000000);
+            vesa_draw_char_34(c, sc_x, sc_y, color, 0x000000);
             sc_x += 8;
             if (sc_x >= SCREEN_W) {
                 sc_x = 0;

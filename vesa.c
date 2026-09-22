@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include "string.h"
 #include "usbhid.h"
+#include "pmm.h"
+#include "rtc.h"
+#include "klog.h"
 
 int c_x = 0;
 int c_y = 0;
@@ -273,7 +276,7 @@ void screen_appmode() {
 }
 
 // draws clock on top right
-clock_draw() {
+void clock_draw() {
     if (!vesa_ready) return;
     int year, month, day, hour, min, sec;
     rtc_get_datetime(&year, &month, &day, &hour, &min, &sec);

@@ -22,6 +22,7 @@
 #include "usbhid.h"
 #include "pl2303.h"
 #include "pump.h"
+#include "serial.h"
 
 #define CHUNK_SIZE 65532
 extern fs_device_t g_drives[MAX_DRIVES];
@@ -800,9 +801,9 @@ void cmd_open(int argc, char** argv) {
         else if (strcmp(dot, ".txt") == 0) {
             cmd_read(argc, argv);
         } 
-        else if (strcmp(dot, ".cim") == 0) {
+        /*else if (strcmp(dot, ".cim") == 0) {
             cmd_showimage(argc, argv);
-        } 
+        }*/ 
         else {
             klog_status("UNKNOWN EXTENSION", 0xFF0000);
         }
@@ -938,7 +939,7 @@ void cmd_blink(int argc, char** argv) {
 
 }
 
-void cmd_debug() {
+void cmd_debug(int argc, char** argv) {
     vesa_clear(0x000000);
     klog("MOUSE X:");
     kklogf("%d", mouse_x);

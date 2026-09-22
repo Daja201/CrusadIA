@@ -3,7 +3,7 @@
 #include "vesa.h"
 #include <stdint.h>
 void klog(const char *msg);
-void klogol(const char *msg);
+void klogol(const char *msg, uint32_t color);
 void kklog(const char *msg);
 void klog_hex(uint32_t val);
 void klogf(const char *fmt, ...);

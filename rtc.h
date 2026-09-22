@@ -10,4 +10,5 @@ void rtc_get_datetime(
     int* min,
     int* sec
 );
+
 #endif
