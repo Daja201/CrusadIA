@@ -1,10 +1,3 @@
-/*
- * tcc_libc.c - the handful of libc functions TinyCC needs that CrusadIA lacks.
- *
- * Everything here is deliberately tiny. It is compiled with
- * -fno-tree-loop-distribute-patterns (see Makefile) so GCC never turns the
- * loops below back into calls to memmove()/memcpy() (= infinite recursion).
- */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,15 +12,12 @@
 #include "klog.h"
 #include "rtc.h"
 
-/* ------------------------------------------------------------------ misc */
-
 int errno;
 static char *empty_environ[1] = { 0 };
 char **environ = empty_environ;
 
 char *getenv(const char *name) { (void)name; return 0; }
 
-/* CrusadIA has no path resolution; just hand back a copy of the name. */
 char *realpath(const char *path, char *resolved) {
     size_t n = strlen(path);
     if (!resolved) resolved = (char *)malloc(n + 1);
@@ -46,13 +36,10 @@ char *strerror(int e) {
     }
 }
 
-/* The kernel is identity mapped, read/write/execute everywhere (no NX). */
 int mprotect(void *addr, unsigned long len, int prot) {
     (void)addr; (void)len; (void)prot;
     return 0;
 }
-
-/* ---------------------------------------------------------------- string */
 
 void *memmove(void *dest, const void *src, size_t n) {
     unsigned char *d = (unsigned char *)dest;
@@ -82,8 +69,6 @@ char *strncat(char *dest, const char *src, size_t n) {
     *d = 0;
     return dest;
 }
-
-/* ------------------------------------------------------- number parsing */
 
 static unsigned long long parse_u64(const char *s, char **end, int base,
                                     int *neg, int *overflow) {
@@ -139,10 +124,6 @@ unsigned long strtoul(const char *s, char **end, int base) {
     return neg ? (unsigned long)(0 - (unsigned long)v) : (unsigned long)v;
 }
 
-/* ------------------------------------------------- floating point (x87) */
-/* The FPU must be initialised (fninit) before any of this runs;
- * tcc_kernel.c does that in tcc_os_fpu_init(). */
-
 long double ldexpl(long double x, int e) {
     long double r;
     /* st(0) = x * 2^trunc(st(1)) */
@@ -177,13 +158,12 @@ long double strtold(const char *s, char **end) {
 
     if (ci_prefix(p, "inf")) {
         if (end) *end = (char *)(p + (ci_prefix(p, "infinity") ? 8 : 3));
-        v = 1.0L; v = ldexpl(v, 20000);            /* overflows to +inf */
+        v = 1.0L; v = ldexpl(v, 20000);
         return neg ? -v : v;
     }
 
     if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X') &&
         (hexval(p[2]) >= 0 || (p[2] == '.' && hexval(p[3]) >= 0))) {
-        /* hexadecimal floating constant: 0x1.8p3 */
         int exp2 = 0, any = 0;
         p += 2;
         while (hexval(*p) >= 0) { v = v * 16.0L + hexval(*p++); any = 1; }
@@ -248,8 +228,6 @@ long double strtold(const char *s, char **end) {
 double strtod(const char *s, char **end) { return (double)strtold(s, end); }
 float  strtof(const char *s, char **end) { return (float)strtold(s, end); }
 
-/* ------------------------------------------------------------------ time */
-
 static long days_from_civil(long y, unsigned m, unsigned d) {
     y -= m <= 2;
     long era = (y >= 0 ? y : y - 399) / 400;
@@ -301,10 +279,6 @@ int gettimeofday(struct timeval *tv, void *tz) {
     if (tv) { tv->tv_sec = time(0); tv->tv_usec = 0; }
     return 0;
 }
-
-/* ----------------------------------------------------------------- stdio */
-/* stdout/stderr are printed on the CrusadIA terminal via klog().
- * Real files go through the FILE functions in fs.c. */
 
 static FILE std_streams[3];
 FILE *stdin  = &std_streams[0];
@@ -363,9 +337,7 @@ int fputc(int c, FILE *f) {
 
 int puts(const char *s)  { klog(s); klog("\n"); return 0; }
 int putchar(int c)       { return fputc(c, stdout); }
-int fflush(FILE *f)      { (void)f; return 0; }   /* fs.c writes through */
+int fflush(FILE *f)      { (void)f; return 0; }
 int remove(const char *p){ return unlink(p); }
 
-/* Not supported: writing ELF/objects to a file (-o / tcc_output_file()). */
-FILE *fdopen(int fd, const char *mode)               { (void)fd; (void)mode; return 0; }
 FILE *freopen(const char *p, const char *m, FILE *f) { (void)p; (void)m; (void)f; return 0; }

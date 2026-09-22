@@ -908,6 +908,12 @@ int close(int fd) {
     return 0;
 }
 
+FILE *fdopen(int fd, const char *mode) {
+    (void)mode;
+    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return 0;
+    return fd_table[fd];
+}
+
 long read(int fd, void* buf, size_t count) {
     if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
     return (long)fread(buf, 1, count, fd_table[fd]);

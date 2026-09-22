@@ -180,10 +180,40 @@ fail:
     return -1;
 }
 
+typedef struct {
+    const char *name;      /* path (file mode) or display name (string mode) */
+    const char *source;    /* NULL = compile the file `name`                 */
+    const char *out_path;  /* where to write the .o file on the drive        */
+    int    ok;             /* out: 1 if the .o file was written              */
+} compile_req_t;
+
+static int do_compile_obj(void *arg) {
+    compile_req_t *r = (compile_req_t *)arg;
+
+    TCCState *s = tcc_new();
+    if (!s) { kklog("cc: tcc_new() failed (out of memory?)"); return -1; }
+    tcc_set_error_func(s, 0, tcc_error_cb);
+    tcc_set_options(s, "-nostdlib");
+    if (tcc_set_output_type(s, TCC_OUTPUT_OBJ) < 0) goto fail;
+
+    for (unsigned i = 0; i < GUEST_SYM_COUNT; i++)
+        tcc_add_symbol(s, guest_syms[i].name, guest_syms[i].addr);
+
+    if ((r->source ? tcc_compile_string(s, r->source) : tcc_add_file(s, r->name)) < 0) goto fail;
+    if (tcc_output_file(s, r->out_path) < 0) goto fail;
+
+    r->ok = 1;
+    tcc_delete(s);
+    return 0;
+fail:
+    tcc_delete(s);
+    return -1;
+}
+
 #define STACK_WANT (768 * 1024)
 #define STACK_MIN  (128 * 1024)
 
-static int run_req(run_req_t *r) {
+static int on_big_stack(int (*fn)(void *), void *arg) {
     size_t sz = STACK_WANT;
     uint8_t *mem = 0;
     while (sz >= STACK_MIN && !(mem = (uint8_t *)malloc(sz))) sz /= 2;
@@ -192,7 +222,7 @@ static int run_req(run_req_t *r) {
 
     tcc_os_fpu_init();
     uintptr_t top = ((uintptr_t)mem + sz) & ~(uintptr_t)15;
-    int rc = tcc_os_call_on_stack((void *)top, do_run, r);
+    int rc = tcc_os_call_on_stack((void *)top, fn, arg);
 
     for (int i = 0; i < 64; i++)
         if (mem[i] != 0xA5) { kklog("cc: WARNING: compiler stack overflowed (program too big/deep?)"); break; }
@@ -202,16 +232,28 @@ static int run_req(run_req_t *r) {
 
 int tcc_os_run_file(const char *path, int argc, char **argv, int *exit_code) {
     run_req_t r = { path, 0, argc, argv, 0, 0 };
-    int rc = run_req(&r);
+    int rc = on_big_stack(do_run, &r);
     if (exit_code) *exit_code = r.exit_code;
     return (rc == 0 && r.compiled) ? 0 : -1;
 }
 
 int tcc_os_run_source(const char *name, const char *source, int argc, char **argv, int *exit_code) {
     run_req_t r = { name, source, argc, argv, 0, 0 };
-    int rc = run_req(&r);
+    int rc = on_big_stack(do_run, &r);
     if (exit_code) *exit_code = r.exit_code;
     return (rc == 0 && r.compiled) ? 0 : -1;
+}
+
+int tcc_os_compile_obj_file(const char *path, const char *out_path) {
+    compile_req_t r = { path, 0, out_path, 0 };
+    int rc = on_big_stack(do_compile_obj, &r);
+    return (rc == 0 && r.ok) ? 0 : -1;
+}
+
+int tcc_os_compile_obj_source(const char *name, const char *source, const char *out_path) {
+    compile_req_t r = { name, source, out_path, 0 };
+    int rc = on_big_stack(do_compile_obj, &r);
+    return (rc == 0 && r.ok) ? 0 : -1;
 }
 
 /* ----------------------------------------------------------- shell hook */
@@ -221,6 +263,20 @@ void cmd_cc(int argc, char **argv) {
     if (argc < 2) {
         kklog("usage: cc <file.c> [args...]     compile and run a C file");
         kklog("       cc -e \"<C source>\"        compile and run a snippet");
+        kklog("       cc -c <file.c> -o <out.o>  compile to an object file and save it to the drive");
+        return;
+    }
+    if (strcmp(argv[1], "-c") == 0) {
+        if (argc < 3) { kklog("cc -c: missing source file"); return; }
+        const char *src_path = argv[2];
+        const char *out_path = 0;
+        for (int i = 3; i < argc - 1; i++)
+            if (strcmp(argv[i], "-o") == 0) { out_path = argv[i + 1]; break; }
+        if (!out_path) { kklog("cc -c: missing -o <out.o>"); return; }
+        if (tcc_os_compile_obj_file(src_path, out_path) == 0)
+            klogf("[cc] wrote %s\n", out_path);
+        else
+            klogf("[cc] failed to compile %s\n", src_path);
         return;
     }
     if (strcmp(argv[1], "-e") == 0) {

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <stdio.h>
 #include "tcc_embedded.h"
 
 #define VFD_EMBED_BASE 100
@@ -38,14 +39,19 @@ int tcc_os_open(const char *path, int flags, ...) {
                 if (!vfd[i].used) {
                     vfd[i].used = 1; vfd[i].data = e->data; vfd[i].size = e->size; vfd[i].pos = 0;
                     return VFD_EMBED_BASE + i;
-                }
+                };
             }
             return -1;
         }
-        if (strncmp(path, "/tcc/", 5) == 0) return -1;   /* other virtual paths: not found */
+        if (strncmp(path, "/tcc/", 5) == 0) return -1; 
     }
     int fd = open(path, flags);
     return fd < 0 ? -1 : fd + VFD_REAL_SHIFT;
+}
+
+FILE *tcc_os_fdopen(int fd, const char *mode) {
+    if (fd < VFD_REAL_SHIFT) return 0;
+    return fdopen(fd - VFD_REAL_SHIFT, mode);
 }
 
 long tcc_os_read(int fd, void *buf, size_t n) {

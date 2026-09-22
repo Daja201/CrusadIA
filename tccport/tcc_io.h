@@ -10,4 +10,5 @@
 #define read(...)  tcc_os_read(__VA_ARGS__)
 #define close(...) tcc_os_close(__VA_ARGS__)
 #define lseek(...) tcc_os_lseek(__VA_ARGS__)
+#define fdopen(...) tcc_os_fdopen(__VA_ARGS__)
 #endif

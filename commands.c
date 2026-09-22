@@ -802,9 +802,9 @@ void cmd_open(int argc, char** argv) {
         else if (strcmp(dot, ".txt") == 0) {
             cmd_read(argc, argv);
         } 
-        /*else if (strcmp(dot, ".cim") == 0) {
-            cmd_showimage(argc, argv);
-        }*/ 
+        else if (strcmp(dot, ".cap") == 0) {
+            cmd_cc(argc, argv);
+        } 
         else {
             klog_status("UNKNOWN EXTENSION", 0xFF0000);
         }
