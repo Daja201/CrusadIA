@@ -16,7 +16,13 @@
  *                                       tags[] match <tag>
  *   mkfs [total_sectors] [inode_count]  create a fresh, empty COS image
 */
-
+#include <stdio.h>
+#include <stdlib.h>
+#include "string.h"
+#include <stdint.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include "string.h"
 #include <stdint.h>
