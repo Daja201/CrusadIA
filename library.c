@@ -41,6 +41,7 @@ static const lib_entry_t lib_entries[] = {
     {"usb",     "ADVANCED", "usb",                  "shows available usb devices"},
     {"ss",     "ADVANCED", "ss <character>",                  "sends serial on COM1"},
     {"app",      "ADVANCED", "app <app_name>",         "runs an app"},
+    {"cc",       "ADVANCED", "cc <file.c> [args] | cc -e \"<code>\"", "compiles a C file in memory with TinyCC and runs it"},
 };
 
 static const int lib_entry_count = sizeof(lib_entries) / sizeof(lib_entry_t);

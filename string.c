@@ -281,76 +281,167 @@ void abort(void) {
     task_exit();
 }
 
-static void vsnprintf_put(char* buf, size_t size, size_t* pos, char c) {
-    if (*pos + 1 < size) buf[*pos] = c;
-    (*pos)++;
+/* ---- vsnprintf ------------------------------------------------------
+ * Supports: flags "-0+ #", width, .precision, '*', length hh h l ll z t j,
+ * conversions d i u x X o c s p f (e/g are printed like f) and %%.
+ * Always returns the length the full output would have (C99 semantics),
+ * and vsnprintf(NULL, 0, ...) is allowed.
+ */
+typedef struct { char *buf; size_t size; size_t pos; } vs_out_t;
+
+static void vs_put(vs_out_t *o, char c) {
+    if (o->pos + 1 < o->size) o->buf[o->pos] = c;
+    o->pos++;
 }
 
-static void vsnprintf_puts(char* buf, size_t size, size_t* pos, const char* s) {
-    while (*s) vsnprintf_put(buf, size, pos, *s++);
+static void vs_fill(vs_out_t *o, char c, int n) {
+    while (n-- > 0) vs_put(o, c);
+}
+
+/* emit [prefix][zeros][body] padded to width */
+static void vs_emit(vs_out_t *o, const char *prefix, int zeros, const char *body,
+                    int blen, int width, int left, int zero_pad) {
+    int plen = (int)strlen(prefix);
+    int total = plen + zeros + blen;
+    int pad = width > total ? width - total : 0;
+    if (!left && !zero_pad) vs_fill(o, ' ', pad);
+    for (int i = 0; i < plen; i++) vs_put(o, prefix[i]);
+    if (!left && zero_pad) vs_fill(o, '0', pad);
+    vs_fill(o, '0', zeros);
+    for (int i = 0; i < blen; i++) vs_put(o, body[i]);
+    if (left) vs_fill(o, ' ', pad);
 }
 
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list args) {
-    size_t pos = 0;
-    char numbuf[32];
-    for (size_t i = 0; fmt[i] != '\0'; i++) {
-        if (fmt[i] != '%') {
-            vsnprintf_put(buf, size, &pos, fmt[i]);
-            continue;
+    vs_out_t o = { buf, size, 0 };
+    for (const char *f = fmt; *f; f++) {
+        if (*f != '%') { vs_put(&o, *f); continue; }
+        f++;
+        int left = 0, zero = 0, plus = 0, space = 0, alt = 0;
+        for (;; f++) {
+            if (*f == '-') left = 1;
+            else if (*f == '0') zero = 1;
+            else if (*f == '+') plus = 1;
+            else if (*f == ' ') space = 1;
+            else if (*f == '#') alt = 1;
+            else break;
         }
-        i++;
-        int is_long = 0;
-        if (fmt[i] == 'l') { is_long = 1; i++; }
-        switch (fmt[i]) {
-            case 'd': {
-                long val = is_long ? va_arg(args, long) : (long)va_arg(args, int);
-                itoa((int)val, numbuf, 10);
-                vsnprintf_puts(buf, size, &pos, numbuf);
-                break;
-            }
-            case 'u': {
-                unsigned long val = is_long ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
-                char tmp[32];
-                int idx = 0;
-                if (val == 0) tmp[idx++] = '0';
-                while (val) { tmp[idx++] = '0' + (val % 10); val /= 10; }
-                while (idx > 0) vsnprintf_put(buf, size, &pos, tmp[--idx]);
-                break;
-            }
-            case 'x': {
-                unsigned long val = is_long ? va_arg(args, unsigned long) : (unsigned long)va_arg(args, unsigned int);
-                itoa((int)val, numbuf, 16);
-                vsnprintf_puts(buf, size, &pos, numbuf);
-                break;
-            }
-            case 'p': {
-                unsigned long val = (unsigned long)va_arg(args, void*);
-                vsnprintf_puts(buf, size, &pos, "0x");
-                itoa((int)val, numbuf, 16);
-                vsnprintf_puts(buf, size, &pos, numbuf);
-                break;
-            }
-            case 's': {
-                char* s = va_arg(args, char*);
-                vsnprintf_puts(buf, size, &pos, s ? s : "(null)");
+        int width = 0;
+        if (*f == '*') {
+            width = va_arg(args, int);
+            if (width < 0) { left = 1; width = -width; }
+            f++;
+        } else {
+            while (*f >= '0' && *f <= '9') width = width * 10 + (*f++ - '0');
+        }
+        int prec = -1;
+        if (*f == '.') {
+            f++; prec = 0;
+            if (*f == '*') { prec = va_arg(args, int); if (prec < 0) prec = -1; f++; }
+            else while (*f >= '0' && *f <= '9') prec = prec * 10 + (*f++ - '0');
+        }
+        int lng = 0;   /* -2 hh, -1 h, 0 int, 1 long, 2 long long */
+        for (;;) {
+            if (*f == 'l') { lng++; f++; }
+            else if (*f == 'h') { lng--; f++; }
+            else if (*f == 'z' || *f == 't' || *f == 'j') { lng = 1; f++; }
+            else break;
+        }
+        if (lng > 2) lng = 2;
+        if (lng < -2) lng = -2;
+        char conv = *f;
+        if (!conv) break;
+
+        switch (conv) {
+            case 'd': case 'i': case 'u': case 'x': case 'X': case 'o': case 'p': {
+                unsigned long long v;
+                int neg = 0;
+                int base = 10, upper = (conv == 'X');
+                const char *prefix = "";
+                if (conv == 'd' || conv == 'i') {
+                    long long sv;
+                    if (lng == 2) sv = va_arg(args, long long);
+                    else if (lng == 1) sv = va_arg(args, long);
+                    else { sv = va_arg(args, int); if (lng == -1) sv = (short)sv; else if (lng == -2) sv = (signed char)sv; }
+                    if (sv < 0) { neg = 1; v = 0ULL - (unsigned long long)sv; } else v = (unsigned long long)sv;
+                    prefix = neg ? "-" : plus ? "+" : space ? " " : "";
+                } else {
+                    if (conv == 'p') { v = (unsigned long)va_arg(args, void *); base = 16; prefix = "0x"; }
+                    else {
+                        if (lng == 2) v = va_arg(args, unsigned long long);
+                        else if (lng == 1) v = va_arg(args, unsigned long);
+                        else { v = va_arg(args, unsigned int); if (lng == -1) v = (unsigned short)v; else if (lng == -2) v = (unsigned char)v; }
+                        if (conv == 'x' || conv == 'X') { base = 16; if (alt && v) prefix = upper ? "0X" : "0x"; }
+                        else if (conv == 'o') { base = 8; if (alt) prefix = "0"; }
+                    }
+                }
+                char tmp[24];
+                int n = 0;
+                const char *digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+                if (v == 0) { if (prec != 0) tmp[n++] = '0'; }
+                while (v > 0xFFFFFFFFULL) { tmp[n++] = digits[(unsigned)(v % (unsigned)base)]; v /= (unsigned)base; }
+                { unsigned w = (unsigned)v; while (w) { tmp[n++] = digits[w % (unsigned)base]; w /= (unsigned)base; } }
+                char body[24];
+                for (int i = 0; i < n; i++) body[i] = tmp[n - 1 - i];
+                int zeros = prec > n ? prec - n : 0;
+                vs_emit(&o, prefix, zeros, body, n, width, left, zero && !left && prec < 0);
                 break;
             }
             case 'c': {
                 char c = (char)va_arg(args, int);
-                vsnprintf_put(buf, size, &pos, c);
+                vs_emit(&o, "", 0, &c, 1, width, left, 0);
+                break;
+            }
+            case 's': {
+                const char *s = va_arg(args, const char *);
+                if (!s) s = "(null)";
+                int n = 0;
+                while (s[n] && (prec < 0 || n < prec)) n++;
+                vs_emit(&o, "", 0, s, n, width, left, 0);
+                break;
+            }
+            case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
+                double d = va_arg(args, double);
+                int p = prec < 0 ? 6 : prec;
+                if (p > 9) p = 9;
+                const char *prefix = "";
+                char body[48];
+                int n = 0;
+                if (d != d) { body[n++] = 'n'; body[n++] = 'a'; body[n++] = 'n'; }
+                else {
+                    if (d < 0) { prefix = "-"; d = -d; } else if (plus) prefix = "+"; else if (space) prefix = " ";
+                    if (d > 1.0e18) { body[n++] = 'i'; body[n++] = 'n'; body[n++] = 'f'; }
+                    else {
+                        unsigned long long ip = (unsigned long long)d;
+                        double frac = d - (double)ip;
+                        unsigned long long scale = 1;
+                        for (int i = 0; i < p; i++) scale *= 10;
+                        unsigned long long fp = (unsigned long long)(frac * (double)scale + 0.5);
+                        if (fp >= scale) { ip++; fp -= scale; }
+                        char t[24]; int tn = 0;
+                        if (ip == 0) t[tn++] = '0';
+                        while (ip) { t[tn++] = (char)('0' + (unsigned)(ip % 10)); ip /= 10; }
+                        while (tn) body[n++] = t[--tn];
+                        if (p > 0 || alt) body[n++] = '.';
+                        char ft[12];
+                        for (int i = p - 1; i >= 0; i--) { ft[i] = (char)('0' + (unsigned)(fp % 10)); fp /= 10; }
+                        for (int i = 0; i < p; i++) body[n++] = ft[i];
+                    }
+                }
+                vs_emit(&o, prefix, 0, body, n, width, left, zero && !left);
                 break;
             }
             case '%':
-                vsnprintf_put(buf, size, &pos, '%');
+                vs_put(&o, '%');
                 break;
             default:
-                vsnprintf_put(buf, size, &pos, '%');
-                vsnprintf_put(buf, size, &pos, fmt[i]);
+                vs_put(&o, '%');
+                vs_put(&o, conv);
                 break;
         }
     }
-    if (size > 0) buf[pos < size ? pos : size - 1] = '\0';
-    return (int)pos;
+    if (size > 0) buf[o.pos < size ? o.pos : size - 1] = '\0';
+    return (int)o.pos;
 }
 
 int snprintf(char* buf, size_t size, const char* fmt, ...) {

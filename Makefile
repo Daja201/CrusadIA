@@ -40,6 +40,47 @@ all: $(ISO)
 %.o: %.s
 	$(NASM) $(NASM_FLAGS) $< -o $@
 
+# ---------------------------------------------------------------------------
+# TinyCC: in-OS C compiler (see tccport/ and the `cc` shell command)
+# Needs a HOST compiler for two tiny build-time generators (tcc's c2str and
+# tccport/mkembed).  Override with e.g. `make HOSTCC=gcc`.
+# ---------------------------------------------------------------------------
+HOSTCC ?= cc
+TCC_DIR = tinycc
+ifneq ($(wildcard $(TCC_DIR)/config.h),)
+$(error $(TCC_DIR)/config.h exists (left by tinycc's ./configure?) and would override tccport/config.h - delete it)
+endif
+TCCPORT = tccport
+TCC_GEN = $(TCCPORT)/gen
+TCC_CFLAGS = -m32 -ffreestanding -c -fno-builtin -nostdinc -isystem $(GCC_INC) \
+             -I$(TCCPORT)/include -I. -I$(TCC_GEN) -I$(TCCPORT) -I$(TCC_DIR) \
+             -O2 -w -fno-strict-aliasing -fno-stack-protector -fno-pie -fcf-protection=none \
+             -mno-sse -mno-mmx -fno-tree-loop-distribute-patterns
+TCC_OBJ = $(TCC_DIR)/libtcc.o $(TCCPORT)/tcc1.o $(TCCPORT)/tcc_libc.o \
+          $(TCCPORT)/tcc_vfs.o $(TCCPORT)/tcc_kernel.o
+TCC_EMBED = $(addprefix $(TCC_DIR)/include/,stdarg.h stddef.h stdbool.h float.h stdalign.h \
+                                            stdnoreturn.h tgmath.h varargs.h stdatomic.h) \
+            $(wildcard $(TCCPORT)/guest/include/*.h)
+OBJ += $(TCC_OBJ)
+
+$(TCC_GEN)/c2str: $(TCC_DIR)/conftest.c
+	mkdir -p $(TCC_GEN)
+	$(HOSTCC) -DC2STR $< -o $@
+$(TCC_GEN)/tccdefs_.h: $(TCC_DIR)/include/tccdefs.h $(TCC_GEN)/c2str
+	$(TCC_GEN)/c2str $< $@
+$(TCC_GEN)/mkembed: $(TCCPORT)/mkembed.c
+	mkdir -p $(TCC_GEN)
+	$(HOSTCC) $< -o $@
+$(TCC_GEN)/tcc_embedded.h: $(TCC_GEN)/mkembed $(TCC_EMBED)
+	$(TCC_GEN)/mkembed $@ $(TCC_EMBED)
+
+# libtcc is built as ONE_SOURCE (libtcc.c #includes the rest of the compiler)
+$(TCC_DIR)/libtcc.o: $(TCC_DIR)/libtcc.c $(wildcard $(TCC_DIR)/*.c $(TCC_DIR)/*.h) \
+                     $(TCCPORT)/config.h $(TCCPORT)/tcc_io.h $(TCC_GEN)/tccdefs_.h
+	$(CC) $(TCC_CFLAGS) -DONE_SOURCE=1 -include $(TCCPORT)/tcc_io.h $< -o $@
+$(TCCPORT)/tcc1.o $(TCCPORT)/tcc_libc.o $(TCCPORT)/tcc_vfs.o $(TCCPORT)/tcc_kernel.o: $(TCCPORT)/%.o: $(TCCPORT)/%.c $(TCC_GEN)/tcc_embedded.h $(TCCPORT)/tcc_kernel.h
+	$(CC) $(TCC_CFLAGS) $< -o $@
+
 kernel.elf: $(OBJ)
 	$(LD) $(LD_FLAGS) $(OBJ) -o $(KERNEL)
 
@@ -61,6 +102,8 @@ $(ISO): $(KERNEL)
 
 clean:
 	rm -f *.o $(KERNEL) $(ISO)
+	rm -f $(TCC_DIR)/*.o $(TCCPORT)/*.o
+	rm -rf $(TCC_GEN)
 	rm -rf $(ISO_DIR)
 	-rm -f disk.img
 	-rm -f disk2.img

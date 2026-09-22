@@ -23,6 +23,7 @@
 #include "pl2303.h"
 #include "pump.h"
 #include "serial.h"
+#include "tccport/tcc_kernel.h"
 
 #define CHUNK_SIZE 65532
 extern fs_device_t g_drives[MAX_DRIVES];
@@ -988,6 +989,7 @@ command_t commands[] = {
     {"pumpcmd", cmd_pumpcmd},
     {"blink", cmd_blink},
     {"debug", cmd_debug},
+    {"cc", cmd_cc},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);

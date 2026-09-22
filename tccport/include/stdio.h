@@ -20,5 +20,6 @@ int   puts    (const char *s);
 int   putchar (int c);
 int   fflush  (FILE *f);
 FILE *fdopen  (int fd, const char *mode);
+FILE *freopen (const char *path, const char *mode, FILE *stream);
 int   remove  (const char *path);
 #endif

@@ -1,6 +1,21 @@
+diff --git a/.gitignore b/.gitignore
+index 7284885..cb1c8c7 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,3 +1,5 @@
+ *.img
+ *.img
+-tinycc/
+\ No newline at end of file
++tinycc/
++tccport/gen/
++tccport/*.o
+\ No newline at end of file
+diff --git a/Makefile b/Makefile
+index 550b194..ee997ae 100644
 --- a/Makefile
 +++ b/Makefile
-@@ -40,6 +40,47 @@
+@@ -40,6 +40,47 @@ all: $(ISO)
  %.o: %.s
  	$(NASM) $(NASM_FLAGS) $< -o $@
  
@@ -48,7 +63,7 @@
  kernel.elf: $(OBJ)
  	$(LD) $(LD_FLAGS) $(OBJ) -o $(KERNEL)
  
-@@ -61,6 +102,8 @@
+@@ -61,6 +102,8 @@ $(ISO): $(KERNEL)
  
  clean:
  	rm -f *.o $(KERNEL) $(ISO)
@@ -57,9 +72,56 @@
  	rm -rf $(ISO_DIR)
  	-rm -f disk.img
  	-rm -f disk2.img
+diff --git a/bootinfo.c b/bootinfo.c
+index d7cf1cc..00afa97 100644
+--- a/bootinfo.c
++++ b/bootinfo.c
+@@ -47,7 +47,7 @@ void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
+             current_addr += size + 4;
+         }
+         pmm_deinit_region(0x0, 0x100000);
+-        pmm_deinit_region(0x100000, 0x400000);
++        pmm_deinit_region(0x100000, 0x500000);   /* kernel + bss (grew with TinyCC): 1MB..6MB */
+     } else {
+         klog("WARNING: No memory map provided by GRUB!\n");
+     }
+diff --git a/commands.c b/commands.c
+index 8e99ef7..a3112c8 100644
+--- a/commands.c
++++ b/commands.c
+@@ -23,6 +23,7 @@
+ #include "pl2303.h"
+ #include "pump.h"
+ #include "serial.h"
++#include "tccport/tcc_kernel.h"
+ 
+ #define CHUNK_SIZE 65532
+ extern fs_device_t g_drives[MAX_DRIVES];
+@@ -970,6 +971,7 @@ command_t commands[] = {
+     {"mem", cmd_mem},
+     {"shutdown", cmd_shutdown},
+     {"app", cmd_app},
++    {"cc", cmd_cc},
+     {"mf", cmd_mf},
+     {"cd", cmd_cd},
+     {"usb", cmd_usb},
+diff --git a/library.c b/library.c
+index 9371caf..06d2a1a 100644
+--- a/library.c
++++ b/library.c
+@@ -41,6 +41,7 @@ static const lib_entry_t lib_entries[] = {
+     {"usb",     "ADVANCED", "usb",                  "shows available usb devices"},
+     {"ss",     "ADVANCED", "ss <character>",                  "sends serial on COM1"},
+     {"app",      "ADVANCED", "app <app_name>",         "runs an app"},
++    {"cc",       "ADVANCED", "cc <file.c> [args] | cc -e \"<code>\"", "compiles a C file in memory with TinyCC and runs it"},
+ };
+ 
+ static const int lib_entry_count = sizeof(lib_entries) / sizeof(lib_entry_t);
+diff --git a/setjmp.s b/setjmp.s
+index 058bad7..b84a668 100644
 --- a/setjmp.s
 +++ b/setjmp.s
-@@ -3,6 +3,12 @@
+@@ -3,6 +3,12 @@ bits 32
  global setjmp
  global longjmp
  
@@ -72,7 +134,7 @@
  setjmp:
      mov eax, [esp+4]
      mov ecx, [esp]
-@@ -10,7 +16,8 @@
+@@ -10,7 +16,8 @@ setjmp:
      mov [eax+4], esi
      mov [eax+8], edi
      mov [eax+12], ebp
@@ -82,9 +144,11 @@
      mov [eax+20], ecx
      xor eax, eax
      ret
+diff --git a/string.c b/string.c
+index b860ab7..32a255e 100644
 --- a/string.c
 +++ b/string.c
-@@ -281,76 +281,167 @@
+@@ -281,76 +281,167 @@ void abort(void) {
      task_exit();
  }
  
@@ -241,18 +305,16 @@
              case 's': {
 -                char* s = va_arg(args, char*);
 -                vsnprintf_puts(buf, size, &pos, s ? s : "(null)");
--                break;
--            }
--            case 'c': {
--                char c = (char)va_arg(args, int);
--                vsnprintf_put(buf, size, &pos, c);
 +                const char *s = va_arg(args, const char *);
 +                if (!s) s = "(null)";
 +                int n = 0;
 +                while (s[n] && (prec < 0 || n < prec)) n++;
 +                vs_emit(&o, "", 0, s, n, width, left, 0);
-+                break;
-+            }
+                 break;
+             }
+-            case 'c': {
+-                char c = (char)va_arg(args, int);
+-                vsnprintf_put(buf, size, &pos, c);
 +            case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': {
 +                double d = va_arg(args, double);
 +                int p = prec < 0 ? 6 : prec;
@@ -303,49 +365,3 @@
  }
  
  int snprintf(char* buf, size_t size, const char* fmt, ...) {
---- a/commands.c
-+++ b/commands.c
-@@ -22,6 +22,7 @@
- #include "usbhid.h"
- #include "pl2303.h"
- #include "pump.h"
-+#include "tccport/tcc_kernel.h"
- 
- #define CHUNK_SIZE 65532
- extern fs_device_t g_drives[MAX_DRIVES];
-@@ -969,6 +970,7 @@
-     {"mem", cmd_mem},
-     {"shutdown", cmd_shutdown},
-     {"app", cmd_app},
-+    {"cc", cmd_cc},
-     {"mf", cmd_mf},
-     {"cd", cmd_cd},
-     {"usb", cmd_usb},
---- a/library.c
-+++ b/library.c
-@@ -41,6 +41,7 @@
-     {"usb",     "ADVANCED", "usb",                  "shows available usb devices"},
-     {"ss",     "ADVANCED", "ss <character>",                  "sends serial on COM1"},
-     {"app",      "ADVANCED", "app <app_name>",         "runs an app"},
-+    {"cc",       "ADVANCED", "cc <file.c> [args] | cc -e \"<code>\"", "compiles a C file in memory with TinyCC and runs it"},
- };
- 
- static const int lib_entry_count = sizeof(lib_entries) / sizeof(lib_entry_t);
---- a/bootinfo.c
-+++ b/bootinfo.c
-@@ -47,7 +47,7 @@
-             current_addr += size + 4;
-         }
-         pmm_deinit_region(0x0, 0x100000);
--        pmm_deinit_region(0x100000, 0x400000);
-+        pmm_deinit_region(0x100000, 0x500000);   /* kernel + bss (grew with TinyCC): 1MB..6MB */
-     } else {
-         klog("WARNING: No memory map provided by GRUB!\n");
-     }
---- a/.gitignore
-+++ b/.gitignore
-@@ -1,2 +1,4 @@
- *.img
- *.img
-+tccport/gen/
-+tccport/*.o

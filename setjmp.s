@@ -3,6 +3,12 @@ bits 32
 global setjmp
 global longjmp
 
+; jmp_buf layout: ebx esi edi ebp esp eip   (see setjmp.h)
+; The saved esp is the value the caller has AFTER setjmp returns (esp+4).
+; The old code saved esp *before* the return-address pop, so after a longjmp
+; the caller resumed with esp 4 bytes too low. With frame pointers (-O0) that
+; goes unnoticed, with optimisation (-O1/-O2, needed for TinyCC) it corrupts
+; the caller's stack.
 setjmp:
     mov eax, [esp+4]
     mov ecx, [esp]
@@ -10,7 +16,8 @@ setjmp:
     mov [eax+4], esi
     mov [eax+8], edi
     mov [eax+12], ebp
-    mov [eax+16], esp
+    lea edx, [esp+4]
+    mov [eax+16], edx
     mov [eax+20], ecx
     xor eax, eax
     ret

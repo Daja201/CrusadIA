@@ -47,7 +47,7 @@ void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
             current_addr += size + 4;
         }
         pmm_deinit_region(0x0, 0x100000);
-        pmm_deinit_region(0x100000, 0x400000);
+        pmm_deinit_region(0x100000, 0x500000);   /* kernel + bss (grew with TinyCC): 1MB..6MB */
     } else {
         klog("WARNING: No memory map provided by GRUB!\n");
     }
