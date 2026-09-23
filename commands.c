@@ -784,9 +784,141 @@ void cmd_usb(int argc, char** argv) {
     }
 }
 
-void cmd_showimage(){
-    //func for printing pixels based on my format
-} 
+#define BMP_MAX_ROW_BYTES 8192
+
+static int bmp_parse_header(uint8_t* hdr, uint32_t* data_off, int32_t* width, int32_t* height, uint16_t* bpp, uint32_t* comp) {
+    if (hdr[0] != 'B' || hdr[1] != 'M') return -1;
+    memcpy(data_off, hdr + 10, 4);
+    memcpy(width, hdr + 18, 4);
+    memcpy(height, hdr + 22, 4);
+    memcpy(bpp, hdr + 28, 2);
+    memcpy(comp, hdr + 30, 4);
+    if (*bpp != 24 || *comp != 0) return -2;
+    return 0;
+}
+
+void cmd_showimage_custom(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: showimage <filename>");
+        return;
+    }
+    inode_t root;
+    read_inode(g_current_dir, &root);
+    int inode_num = dir_lookup(&root, argv[1]);
+    if (inode_num < 0) {
+        klog_status("ERROR FILE NOT FOUND", 0xFF0000);
+        return;
+    }
+    inode_t file_node;
+    read_inode(inode_num, &file_node);
+    uint8_t hdr[54];
+    if (fs_read((uint32_t)inode_num, &file_node, 0, sizeof(hdr), hdr) < sizeof(hdr)) {
+        klog_status("ERROR COULD NOT READ BMP HEADER", 0xFF0000);
+        return;
+    }
+    uint32_t data_off, comp;
+    int32_t width, height;
+    uint16_t bpp;
+    int rc = bmp_parse_header(hdr, &data_off, &width, &height, &bpp, &comp);
+    if (rc == -1) {
+        klog_status("NOT A VALID BMP FILE", 0xFF0000);
+        return;
+    } else if (rc == -2) {
+        klog_status("UNSUPPORTED BMP FORMAT", 0xFF0000);
+        return;
+    }
+    int top_down = height < 0;
+    uint32_t abs_height = top_down ? (uint32_t)(-height) : (uint32_t)height;
+    uint32_t row_size = ((uint32_t)width * 3 + 3) & ~3u;
+    static uint8_t row[BMP_MAX_ROW_BYTES];
+    if (row_size > sizeof(row)) {
+        klog_status("BMP TOO WIDE", 0xFF0000);
+        return;
+    }
+    int origin_x = c_x;
+    int origin_y = c_y;
+    for (uint32_t r = 0; r < abs_height; r++) {
+        uint32_t file_row = top_down ? r : (abs_height - 1 - r);
+        uint32_t offset = data_off + file_row * row_size;
+        if (fs_read((uint32_t)inode_num, &file_node, offset, row_size, row) < row_size) break;
+        for (int32_t x = 0; x < width; x++) {
+            uint8_t b = row[x * 3];
+            uint8_t g = row[x * 3 + 1];
+            uint8_t rr = row[x * 3 + 2];
+            uint32_t color = ((uint32_t)rr << 16) | ((uint32_t)g << 8) | b;
+            vesa_putpixel(origin_x + x, origin_y + (int)r, color);
+        }
+    }
+    vesa_swap();
+}
+
+void cmd_showimage32(int argc, char** argv) {
+    if (!g_fat32.mounted) {
+        kklog_color("No FAT32 volume mounted. Use 'mount32' first.", 0xFF0000);
+        return;
+    }
+    if (argc < 2) {
+        kklog("Usage: showimage <filename>");
+        return;
+    }
+    fat32_dirent_t entries[64];
+    int n = fat32_list_dir(g_fat32_dir, entries, 64);
+    int found = -1;
+    for (int i = 0; i < n; i++) {
+        if (strcasecmp(entries[i].name, argv[1]) == 0 && !(entries[i].attr & FAT32_ATTR_DIR)) {
+            found = i;
+            break;
+        }
+    }
+    if (found < 0) {
+        kklog("Error: File not found");
+        return;
+    }
+    uint8_t hdr[54];
+    if (fat32_read(&entries[found], 0, sizeof(hdr), hdr) < sizeof(hdr)) {
+        klog_status("ERROR COULD NOT READ BMP HEADER", 0xFF0000);
+        return;
+    }
+    uint32_t data_off, comp;
+    int32_t width, height;
+    uint16_t bpp;
+    int rc = bmp_parse_header(hdr, &data_off, &width, &height, &bpp, &comp);
+    if (rc == -1) {
+        klog_status("NOT A VALID BMP FILE", 0xFF0000);
+        return;
+    } else if (rc == -2) {
+        klog_status("UNSUPPORTED BMP FORMAT", 0xFF0000);
+        return;
+    }
+    int top_down = height < 0;
+    uint32_t abs_height = top_down ? (uint32_t)(-height) : (uint32_t)height;
+    uint32_t row_size = ((uint32_t)width * 3 + 3) & ~3u;
+    static uint8_t row[BMP_MAX_ROW_BYTES];
+    if (row_size > sizeof(row)) {
+        klog_status("BMP TOO WIDE", 0xFF0000);
+        return;
+    }
+    int origin_x = c_x;
+    int origin_y = c_y;
+    for (uint32_t r = 0; r < abs_height; r++) {
+        uint32_t file_row = top_down ? r : (abs_height - 1 - r);
+        uint32_t offset = data_off + file_row * row_size;
+        if (fat32_read(&entries[found], offset, row_size, row) < row_size) break;
+        for (int32_t x = 0; x < width; x++) {
+            uint8_t b = row[x * 3];
+            uint8_t g = row[x * 3 + 1];
+            uint8_t rr = row[x * 3 + 2];
+            uint32_t color = ((uint32_t)rr << 16) | ((uint32_t)g << 8) | b;
+            vesa_putpixel(origin_x + x, origin_y + (int)r, color);
+        }
+    }
+    vesa_swap();
+}
+
+void cmd_showimage(int argc, char** argv) {
+    if (g_fs_kind == FS_KIND_FAT32) cmd_showimage32(argc, argv);
+    else cmd_showimage_custom(argc, argv);
+}
 
 void cmd_open(int argc, char** argv) {
     if (argc < 2) {
@@ -805,6 +937,9 @@ void cmd_open(int argc, char** argv) {
         else if (strcmp(dot, ".cap") == 0) {
             cmd_cc(argc, argv);
         } 
+        else if (strcmp(dot, ".bmp") == 0) {
+            cmd_showimage(argc, argv);
+        }
         else {
             klog_status("UNKNOWN EXTENSION", 0xFF0000);
         }
@@ -990,6 +1125,7 @@ command_t commands[] = {
     {"blink", cmd_blink},
     {"debug", cmd_debug},
     {"cc", cmd_cc},
+    {"showimage", cmd_showimage},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);
