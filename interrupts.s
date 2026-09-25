@@ -96,29 +96,29 @@ isr_common_stub:
 global isr32
 isr32:
     cli
-    push byte 0      ; Dummy error kód
-    push byte 32     ; Číslo přerušení (IRQ0)
-    pusha            ; Uloží EAX až EDI (8 registrů)
-    push ds          ; Uloží segmenty
+    push byte 0 
+    push byte 32 
+    pusha     
+    push ds 
     push es
     push fs
     push gs
-    mov ax, 0x18     ; Nahraje kernel data segment (ujisti se, že v create_task používáš taky 0x10)
+    mov ax, 0x18    
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
-    push esp         ; Předáme ukazatel na současný zásobník do C
+    push esp     
     call schedule_handler
-    mov esp, eax     ; <<< PŘEPNUTÍ ZÁSOBNÍKU >>>
-    mov al, 0x20     ; Odeslání EOI (End of Interrupt) do PIC
-    out 0x20, al     ; Pokud toto chybí, timer už znovu netikne
-    pop gs           ; Obnovíme segmenty (z NOVÉHO zásobníku)
+    mov esp, eax  
+    mov al, 0x20 
+    out 0x20, al  
+    pop gs  
     pop fs
     pop es
     pop ds
-    popa             ; Obnovíme registry EAX-EDI
-    add esp, 8       ; Přeskočíme chybový kód (0) a číslo (32)
+    popa       
+    add esp, 8       
     iret
 section .note.GNU-stack
     align 4

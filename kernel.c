@@ -9,6 +9,7 @@
 #include "pmm.h"
 #include "heap.h"
 #include "idt.h"
+#include "gdt.h"
 #include "task.h"
 #include "io.h"
 #include "ac97.h"
@@ -64,6 +65,7 @@ void system_main_task() {
 void kmain(unsigned long mb_magic, unsigned long mb_info) {
     parse_multiboot((uint32_t)mb_magic, (uint32_t)mb_info);
     heap_init();
+    init_gdt();
     init_idt();
     vesa_init_from_params(boot_fb_addr, boot_fb_width, boot_fb_height, boot_fb_bpp, boot_fb_pitch);
     extern void init_paging(uint32_t, uint32_t, uint32_t, uint32_t);
