@@ -118,10 +118,10 @@ run:
 		-device qemu-xhci,id=xhci \
 		-device usb-kbd,bus=xhci.0 \
 		-device usb-mouse,bus=ohci.0 \
-		-m 8G -vga std -serial stdio $(QEMU_ACCEL) \
+		-m 8G -vga std -serial stdio  \
 		-device usb-host,vendorid=0x067b,productid=0x23a3,bus=ohci.0 \
 		$(QEMU_DISPLAY) \
-		-d guest_errors,unimp,int -D /tmp/qemu-debug.log
+		-d int,cpu_reset,guest_errors,unimp -D /tmp/qemu-debug.log
 		
 
 dd_second:

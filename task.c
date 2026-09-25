@@ -1,14 +1,17 @@
 #include "task.h"
 #include <stdint.h>
 #include "pmm.h"
+#include "gdt.h"
 
 #define TASK_STACK_SIZE 16384
+#define TASK_KSTACK_SIZE 8192
 #define MAX_TASKS 16
 extern volatile uint32_t system_ticks;
 task_t tasks[MAX_TASKS];
 int current_task = -1;
 int num_tasks = 0;
 static uint8_t task_stacks[MAX_TASKS][TASK_STACK_SIZE] __attribute__((aligned(16)));
+static uint8_t task_kstacks[MAX_TASKS][TASK_KSTACK_SIZE] __attribute__((aligned(16)));
 
 static uint32_t next_pid = 0;
 
@@ -51,6 +54,9 @@ uint32_t schedule_handler(uint32_t esp) {
 
     if (ticks_left_on_current > 0) {
         ticks_left_on_current--;
+        if (tasks[current_task].is_user) {
+            tss_set_kernel_stack(tasks[current_task].kernel_stack_top);
+        }
         return tasks[current_task].esp;
     }
 
@@ -66,6 +72,10 @@ uint32_t schedule_handler(uint32_t esp) {
     }
     uint32_t p = tasks[current_task].priority;
     ticks_left_on_current = (p > 0) ? (p - 1) : 0;
+
+    if (tasks[current_task].is_user) {
+        tss_set_kernel_stack(tasks[current_task].kernel_stack_top);
+    }
 
     return tasks[current_task].esp;
 }
@@ -92,4 +102,36 @@ void create_task(void (*entry_point)(), uint32_t priority) {
     tasks[slot].pid = next_pid++;
     tasks[slot].state = TASK_READY;
     tasks[slot].priority = priority;
+    tasks[slot].is_user = 0;
+    tasks[slot].kernel_stack_top = 0;
+}
+
+void create_user_task(void (*entry_point)(), uint32_t priority) {
+    int slot = find_dead_slot();
+    if (slot < 0) {
+        if (num_tasks >= MAX_TASKS) return;
+        slot = num_tasks;
+        num_tasks++;
+    }
+
+    uint32_t user_stack_top = (uint32_t)(task_stacks[slot] + TASK_STACK_SIZE);
+    uint32_t kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_KSTACK_SIZE);
+    uint32_t *kstack = (uint32_t *)kernel_stack_top;
+
+    *(--kstack) = GDT_USER_DATA_SEL;
+    *(--kstack) = user_stack_top;
+    *(--kstack) = 0x0202;
+    *(--kstack) = GDT_USER_CODE_SEL;
+    *(--kstack) = (uint32_t)entry_point;
+    *(--kstack) = 0;
+    *(--kstack) = 128;
+    for (int i = 0; i < 8; i++) *(--kstack) = 0;
+    for (int i = 0; i < 4; i++) *(--kstack) = GDT_USER_DATA_SEL;
+
+    tasks[slot].esp = (uint32_t)kstack;
+    tasks[slot].pid = next_pid++;
+    tasks[slot].state = TASK_READY;
+    tasks[slot].priority = priority;
+    tasks[slot].is_user = 1;
+    tasks[slot].kernel_stack_top = kernel_stack_top;
 }

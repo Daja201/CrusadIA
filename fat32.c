@@ -1,6 +1,7 @@
 #include "fat32.h"
 #include "string.h"
 #include "klog.h"
+#include "fcntl.h"
 
 extern void block_read(uint32_t lba, uint8_t* buf);
 extern void block_write(uint32_t lba, const uint8_t* buf);
@@ -666,4 +667,149 @@ int fat32_delete_file(uint32_t dir_cluster, const char* name) {
     ents[fc.found_slot].name[0] = 0xE5;
     block_write(fc.found_lba, buf);
     return 0;
+}
+
+typedef struct {
+    int used;
+    int writable;
+    fat32_dirent_t dirent;
+    uint32_t dir_cluster;
+    char name[FAT32_MAX_NAME];
+    uint32_t pos;
+} fat32_fd_t;
+
+static fat32_fd_t fat32_fds[FAT32_MAX_FDS];
+
+static void split_path(const char* path, char* dirpath, char* base) {
+    const char* p = path;
+    if (*p == '/' || *p == '>') p++;
+    const char* last_sep = 0;
+    for (const char* q = p; *q; q++) {
+        if (*q == '/' || *q == '>') last_sep = q;
+    }
+    if (!last_sep) {
+        dirpath[0] = '\0';
+        strncpy(base, p, FAT32_MAX_NAME - 1);
+        base[FAT32_MAX_NAME - 1] = '\0';
+        return;
+    }
+    uint32_t dlen = (uint32_t)(last_sep - p);
+    if (dlen >= 64) dlen = 63;
+    memcpy(dirpath, p, dlen);
+    dirpath[dlen] = '\0';
+    strncpy(base, last_sep + 1, FAT32_MAX_NAME - 1);
+    base[FAT32_MAX_NAME - 1] = '\0';
+}
+
+static uint32_t resolve_dir_cluster(const char* dirpath) {
+    if (!dirpath[0]) return g_fat32.root_cluster;
+    fat32_dirent_t d;
+    if (fat32_stat(dirpath, &d) != 0) return 0xFFFFFFFF;
+    if (!(d.attr & FAT32_ATTR_DIR)) return 0xFFFFFFFF;
+    return d.first_cluster ? d.first_cluster : g_fat32.root_cluster;
+}
+
+static int fat32_fd_alloc(void) {
+    for (int i = 0; i < FAT32_MAX_FDS; i++) {
+        if (!fat32_fds[i].used) return i;
+    }
+    return -1;
+}
+
+int fat32_open(const char* path, int flags) {
+    if (!g_fat32.mounted || !path) return -1;
+    char dirpath[64];
+    char base[FAT32_MAX_NAME];
+    split_path(path, dirpath, base);
+    uint32_t dc = resolve_dir_cluster(dirpath);
+    if (dc == 0xFFFFFFFF) return -1;
+
+    fat32_dirent_t d;
+    int exists = (fat32_stat(path, &d) == 0);
+    int creating = (flags & O_CREAT) != 0;
+    int truncating = (flags & O_TRUNC) != 0;
+    int appending = (flags & O_APPEND) != 0;
+    int writable = (flags & O_WRONLY) || (flags & O_RDWR);
+
+    if (!exists) {
+        if (!creating) return -1;
+        if (fat32_write_file(dc, base, (const uint8_t*)"", 0) != 0) return -1;
+        if (fat32_stat(path, &d) != 0) return -1;
+    } else if (truncating) {
+        if (fat32_write_file(dc, base, (const uint8_t*)"", 0) != 0) return -1;
+        if (fat32_stat(path, &d) != 0) return -1;
+    }
+
+    int fd = fat32_fd_alloc();
+    if (fd < 0) return -1;
+    fat32_fds[fd].used = 1;
+    fat32_fds[fd].writable = writable;
+    fat32_fds[fd].dirent = d;
+    fat32_fds[fd].dir_cluster = dc;
+    strncpy(fat32_fds[fd].name, base, FAT32_MAX_NAME - 1);
+    fat32_fds[fd].name[FAT32_MAX_NAME - 1] = '\0';
+    fat32_fds[fd].pos = appending ? d.size : 0;
+    return fd;
+}
+
+long fat32_fread(int fd, void* buf, uint32_t count) {
+    if (fd < 0 || fd >= FAT32_MAX_FDS || !fat32_fds[fd].used || !buf) return -1;
+    fat32_fd_t* f = &fat32_fds[fd];
+    uint32_t got = fat32_read(&f->dirent, f->pos, count, (uint8_t*)buf);
+    f->pos += got;
+    return (long)got;
+}
+
+long fat32_fwrite(int fd, const void* buf, uint32_t count) {
+    if (fd < 0 || fd >= FAT32_MAX_FDS || !fat32_fds[fd].used || !fat32_fds[fd].writable || !buf) return -1;
+    fat32_fd_t* f = &fat32_fds[fd];
+    if (fat32_append_file(f->dir_cluster, f->name, (const uint8_t*)buf, count) != 0) return -1;
+    fat32_dirent_t fresh;
+    if (fat32_stat(f->name, &fresh) == 0) {
+        f->dirent.size = fresh.size;
+    } else {
+        f->dirent.size += count;
+    }
+    f->pos += count;
+    return (long)count;
+}
+
+long fat32_flseek(int fd, long offset, int whence) {
+    if (fd < 0 || fd >= FAT32_MAX_FDS || !fat32_fds[fd].used) return -1;
+    fat32_fd_t* f = &fat32_fds[fd];
+    long base = 0;
+    if (whence == 0) base = 0;
+    else if (whence == 1) base = (long)f->pos;
+    else if (whence == 2) base = (long)f->dirent.size;
+    else return -1;
+    long target = base + offset;
+    if (target < 0) return -1;
+    f->pos = (uint32_t)target;
+    return target;
+}
+
+int fat32_fclose(int fd) {
+    if (fd < 0 || fd >= FAT32_MAX_FDS || !fat32_fds[fd].used) return -1;
+    fat32_fds[fd].used = 0;
+    return 0;
+}
+
+int fat32_funlink(const char* path) {
+    if (!g_fat32.mounted || !path) return -1;
+    char dirpath[64];
+    char base[FAT32_MAX_NAME];
+    split_path(path, dirpath, base);
+    uint32_t dc = resolve_dir_cluster(dirpath);
+    if (dc == 0xFFFFFFFF) return -1;
+    return fat32_delete_file(dc, base);
+}
+
+int fat32_fmkdir(const char* path) {
+    if (!g_fat32.mounted || !path) return -1;
+    char dirpath[64];
+    char base[FAT32_MAX_NAME];
+    split_path(path, dirpath, base);
+    uint32_t dc = resolve_dir_cluster(dirpath);
+    if (dc == 0xFFFFFFFF) return -1;
+    return fat32_create_dir(dc, base);
 }

@@ -15,8 +15,11 @@ typedef struct {
     task_state_t state; 
     uint32_t *page_directory;
     uint32_t priority;
+    uint32_t kernel_stack_top;
+    int is_user;
 } task_t;
 void create_task(void (*entry_point)(), uint32_t priority);
+void create_user_task(void (*entry_point)(), uint32_t priority);
 void task_exit(void);
 uint32_t schedule_handler(uint32_t esp);
 void init_multitasking();

@@ -25,6 +25,7 @@ extern void isr32(); extern void isr33(); extern void isr34(); extern void isr35
 extern void isr36(); extern void isr37(); extern void isr38(); extern void isr39();
 extern void isr40(); extern void isr41(); extern void isr42(); extern void isr43();
 extern void isr44(); extern void isr45(); extern void isr46(); extern void isr47();
+extern void isr128();
 
 void idt_set_gate(uint8_t num, uint32_t base, uint16_t sel, uint8_t flags) {
     idt[num].base_low = base & 0xFFFF;
@@ -86,6 +87,7 @@ void init_idt() {
     idt_set_gate(45, (uint32_t)isr45, 0x10, 0x8E);
     idt_set_gate(46, (uint32_t)isr46, 0x10, 0x8E);
     idt_set_gate(47, (uint32_t)isr47, 0x10, 0x8E);
+    idt_set_gate(128, (uint32_t)isr128, 0x10, 0x8E);
     outb(0x20, 0x11);
     outb(0xA0, 0x11);
     outb(0x21, 0x20);

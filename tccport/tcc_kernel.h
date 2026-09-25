@@ -10,6 +10,14 @@ int tcc_os_run_file(const char *path, int argc, char **argv, int *exit_code);
 /* Same, but from a string in memory. `name` is only used in messages. */
 int tcc_os_run_source(const char *name, const char *source, int argc, char **argv, int *exit_code);
 
+/* Same as tcc_os_run_file/tcc_os_run_source, but main() runs as a ring3
+ * (user-mode) task instead of in the kernel. Only a restricted, hardware-
+ * safe subset of host functions is available to the guest in this mode
+ * (console output, heap, string/math, no disk or RTC access) since CrusadIA
+ * does not yet mediate those through syscalls. */
+int tcc_os_run_file_ring3(const char *path, int argc, char **argv, int *exit_code);
+int tcc_os_run_source_ring3(const char *name, const char *source, int argc, char **argv, int *exit_code);
+
 /* Compile a C file into a relocatable ELF object file and write it to
  * out_path through CrusadIA's own filesystem (fs.c), i.e. onto the drive.
  * Returns 0 on success, -1 on compile or write failure. */

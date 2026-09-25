@@ -65,4 +65,14 @@ int fat32_delete_file(uint32_t dir_cluster, const char* name);
 
 extern fat32_fs_t g_fat32;
 
+#define FAT32_MAX_FDS 16
+
+int fat32_open(const char* path, int flags);
+long fat32_fread(int fd, void* buf, uint32_t count);
+long fat32_fwrite(int fd, const void* buf, uint32_t count);
+long fat32_flseek(int fd, long offset, int whence);
+int fat32_fclose(int fd);
+int fat32_funlink(const char* path);
+int fat32_fmkdir(const char* path);
+
 #endif

@@ -24,6 +24,9 @@
 #include "vesa.h"
 #include "rtc.h"
 #include "fs.h"
+#include "task.h"
+#include "syscall.h"
+#include "ring3fs.h"
 
 extern volatile uint32_t system_ticks;   /* idt.c, 1000 Hz PIT tick */
 
@@ -51,6 +54,21 @@ static void guest_abort(void) { guest_exit(134); }
 void os_sleep_ms(uint32_t ms) {
     uint32_t target = system_ticks + ms;
     while ((int32_t)(system_ticks - target) < 0) __asm__ volatile("sti; hlt");
+}
+
+/* ring3-safe counterparts: "sti"/"hlt" are privileged and fault at CPL3, so
+ * guest programs running as a ring3 task get these instead, bound over the
+ * same symbol names in guest_syms_ring3[] below. */
+static void ring3_exit_stub(int code) {
+    __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT), "b"(code) : "memory");
+    for (;;) { }
+}
+static void ring3_abort_stub(void) { ring3_exit_stub(134); }
+
+static void ring3_sleep_ms(uint32_t ms) {
+    uint32_t target = system_ticks + ms;
+    while ((int32_t)(system_ticks - target) < 0)
+        __asm__ volatile ("int $0x80" : : "a"(SYS_YIELD) : "memory");
 }
 
 #define SYM(x)        { #x, (const void *)&x }
@@ -89,6 +107,48 @@ static const struct { const char *name; const void *addr; } guest_syms[] = {
     SYM_AS("__floatundixf", tcc1___floatundixf),
 };
 #define GUEST_SYM_COUNT (sizeof(guest_syms) / sizeof(guest_syms[0]))
+
+/* Reduced symbol table for guest programs run as a ring3 task (see
+ * tcc_os_run_file_ring3 / cmd_cc "-u"). Deliberately excludes anything that
+ * reaches real hardware I/O ports directly (fs.c disk access via
+ * open/read/write/fopen/fclose/etc, rtc.c time/date, the fd api) since those
+ * execute "cli"/"outb"/"inb" and fault with #GP at CPL3. Everything listed
+ * here only touches plain memory (console framebuffer, the heap, strings)
+ * and is safe to run at ring3 under CrusadIA's current flat, user-accessible
+ * address space. */
+static const struct { const char *name; const void *addr; } guest_syms_ring3[] = {
+    SYM(klog), SYM(kklog), SYM(klogf), SYM(klog_color),
+    SYM(Wwidth), SYM(Hheight), SYM(vesa_putpixel), SYM(vesa_draw_rec),
+    SYM(vesa_clear), SYM(vesa_swap),
+    SYM(system_ticks), SYM_AS("os_sleep_ms", ring3_sleep_ms),
+    SYM(printf), SYM(fprintf), SYM(sprintf), SYM(snprintf), SYM(vsnprintf), SYM(vfprintf),
+    SYM(puts), SYM(putchar), SYM(fputs), SYM(fputc), SYM(fflush), SYM(fwrite),
+    SYM(stdin), SYM(stdout), SYM(stderr),
+    SYM(malloc), SYM(calloc), SYM(realloc), SYM(free),
+    SYM_AS("exit", ring3_exit_stub), SYM_AS("abort", ring3_abort_stub),
+    SYM(abs), SYM(atoi), SYM(strtol), SYM(strtoul), SYM(strtod), SYM(qsort), SYM(bsearch), SYM(itoa),
+    SYM(memcpy), SYM(memmove), SYM(memset), SYM(memcmp), SYM(memchr),
+    SYM(strlen), SYM(strcmp), SYM(strncmp), SYM(strcasecmp), SYM(strcpy), SYM(strncpy),
+    SYM(strcat), SYM(strncat), SYM(strchr), SYM(strrchr), SYM(strstr), SYM(strdup),
+    SYM_AS("__ashldi3", tcc1___ashldi3),       SYM_AS("__ashrdi3", tcc1___ashrdi3),
+    SYM_AS("__divdi3", tcc1___divdi3),         SYM_AS("__moddi3", tcc1___moddi3),
+    SYM_AS("__udivdi3", tcc1___udivdi3),       SYM_AS("__umoddi3", tcc1___umoddi3),
+    SYM_AS("__lshrdi3", tcc1___lshrdi3),
+    SYM_AS("__fixdfdi", tcc1___fixdfdi),       SYM_AS("__fixsfdi", tcc1___fixsfdi),
+    SYM_AS("__fixxfdi", tcc1___fixxfdi),       SYM_AS("__fixunsdfdi", tcc1___fixunsdfdi),
+    SYM_AS("__fixunssfdi", tcc1___fixunssfdi), SYM_AS("__fixunsxfdi", tcc1___fixunsxfdi),
+    SYM_AS("__floatundidf", tcc1___floatundidf), SYM_AS("__floatundisf", tcc1___floatundisf),
+    SYM_AS("__floatundixf", tcc1___floatundixf),
+    SYM_AS("cosfs_open", r3_cosfs_open), SYM_AS("cosfs_close", r3_cosfs_close),
+    SYM_AS("cosfs_read", r3_cosfs_read), SYM_AS("cosfs_write", r3_cosfs_write),
+    SYM_AS("cosfs_lseek", r3_cosfs_lseek), SYM_AS("cosfs_unlink", r3_cosfs_unlink),
+    SYM_AS("cosfs_mkdir", r3_cosfs_mkdir),
+    SYM_AS("fat32_open", r3_fat32_open), SYM_AS("fat32_close", r3_fat32_close),
+    SYM_AS("fat32_read", r3_fat32_read), SYM_AS("fat32_write", r3_fat32_write),
+    SYM_AS("fat32_lseek", r3_fat32_lseek), SYM_AS("fat32_unlink", r3_fat32_unlink),
+    SYM_AS("fat32_mkdir", r3_fat32_mkdir),
+};
+#define GUEST_SYM_COUNT_RING3 (sizeof(guest_syms_ring3) / sizeof(guest_syms_ring3[0]))
 
 /* ------------------------------------------------------ low level helpers */
 
@@ -244,6 +304,76 @@ int tcc_os_run_source(const char *name, const char *source, int argc, char **arg
     return (rc == 0 && r.compiled) ? 0 : -1;
 }
 
+/* ------------------------------------------------------ ring3 execution --
+ * Same compile step as do_run(), but instead of calling main() directly in
+ * the kernel, main() is handed to a fresh ring3 task and this (kernel, ring0)
+ * side busy-waits for it to finish. Only one such run is in flight at a
+ * time, matching the single-threaded nature of the "cc" shell command. */
+static int (*g_user_entry)(int, char **);
+static int             g_user_argc;
+static char          **g_user_argv;
+static volatile int    g_user_result;
+static volatile int    g_user_done;
+
+static void user_entry_trampoline(void) {
+    int rc = g_user_entry(g_user_argc, g_user_argv);
+    g_user_result = rc;
+    g_user_done = 1;
+    __asm__ volatile ("int $0x80" : : "a"(SYS_EXIT), "b"(rc) : "memory");
+    for (;;) { }
+}
+
+static int do_run_ring3(void *arg) {
+    run_req_t *r = (run_req_t *)arg;
+    int (*entry)(int, char **);
+
+    TCCState *s = tcc_new();
+    if (!s) { kklog("cc: tcc_new() failed (out of memory?)"); return -1; }
+    tcc_set_error_func(s, 0, tcc_error_cb);
+    tcc_set_options(s, "-nostdlib");
+    if (tcc_set_output_type(s, TCC_OUTPUT_MEMORY) < 0) goto fail;
+
+    for (unsigned i = 0; i < GUEST_SYM_COUNT_RING3; i++)
+        tcc_add_symbol(s, guest_syms_ring3[i].name, guest_syms_ring3[i].addr);
+
+    if ((r->source ? tcc_compile_string(s, r->source) : tcc_add_file(s, r->name)) < 0) goto fail;
+    if (tcc_relocate(s) < 0) goto fail;
+
+    entry = (int (*)(int, char **))tcc_get_symbol(s, "main");
+    if (!entry) { kklog("cc: no main() function"); goto fail; }
+
+    r->compiled   = 1;
+    g_user_entry  = entry;
+    g_user_argc   = r->argc;
+    g_user_argv   = r->argv;
+    g_user_done   = 0;
+    g_user_result = 0;
+
+    create_user_task(user_entry_trampoline, 1);
+    while (!g_user_done) { __asm__ volatile ("sti; hlt"); }
+    r->exit_code = g_user_result;
+
+    tcc_delete(s);
+    return 0;
+fail:
+    tcc_delete(s);
+    return -1;
+}
+
+int tcc_os_run_file_ring3(const char *path, int argc, char **argv, int *exit_code) {
+    run_req_t r = { path, 0, argc, argv, 0, 0 };
+    int rc = on_big_stack(do_run_ring3, &r);
+    if (exit_code) *exit_code = r.exit_code;
+    return (rc == 0 && r.compiled) ? 0 : -1;
+}
+
+int tcc_os_run_source_ring3(const char *name, const char *source, int argc, char **argv, int *exit_code) {
+    run_req_t r = { name, source, argc, argv, 0, 0 };
+    int rc = on_big_stack(do_run_ring3, &r);
+    if (exit_code) *exit_code = r.exit_code;
+    return (rc == 0 && r.compiled) ? 0 : -1;
+}
+
 int tcc_os_compile_obj_file(const char *path, const char *out_path) {
     compile_req_t r = { path, 0, out_path, 0 };
     int rc = on_big_stack(do_compile_obj, &r);
@@ -263,7 +393,34 @@ void cmd_cc(int argc, char **argv) {
     if (argc < 2) {
         kklog("usage: cc <file.c> [args...]     compile and run a C file");
         kklog("       cc -e \"<C source>\"        compile and run a snippet");
+        kklog("       cc -u <file.c> [args...]  compile and run as a ring3 (user-mode) task");
+        kklog("       cc -u -e \"<C source>\"     same, from a snippet");
         kklog("       cc -c <file.c> -o <out.o>  compile to an object file and save it to the drive");
+        return;
+    }
+    int ring3 = 0;
+    if (strcmp(argv[1], "-u") == 0) {
+        if (argc < 3) { kklog("cc -u: missing file or -e"); return; }
+        ring3 = 1;
+        argc--;
+        argv++;
+    }
+    if (ring3 && strcmp(argv[1], "-e") == 0) {
+        if (argc < 3) { kklog("cc -e: missing source"); return; }
+        static char src[1024];
+        src[0] = 0;
+        for (int i = 2; i < argc; i++) {
+            if (i > 2) strncat(src, " ", sizeof src - strlen(src) - 1);
+            strncat(src, argv[i], sizeof src - strlen(src) - 1);
+        }
+        char *av[] = { "<cmdline>", 0 };
+        if (tcc_os_run_source_ring3("<cmdline>", src, 1, av, &code) == 0)
+            klogf("[cc] (ring3) exit code %d\n", code);
+        return;
+    }
+    if (ring3) {
+        if (tcc_os_run_file_ring3(argv[1], argc - 1, argv + 1, &code) == 0)
+            klogf("[cc] (ring3) %s exited with code %d\n", argv[1], code);
         return;
     }
     if (strcmp(argv[1], "-c") == 0) {

@@ -2,6 +2,7 @@ bits 32
 
 extern fault_handler
 extern schedule_handler
+extern syscall_dispatch
 
 %macro ISR_NOERRCODE 1
   global isr%1
@@ -120,6 +121,35 @@ isr32:
     popa       
     add esp, 8       
     iret
+
+global isr128
+isr128:
+    cli
+    push byte 0
+    push byte 128
+    pusha
+    push ds
+    push es
+    push fs
+    push gs
+    mov ax, 0x18
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    push esp
+    call syscall_dispatch
+    add esp, 4
+    mov [esp+44], eax
+    pop gs
+    pop fs
+    pop es
+    pop ds
+    popa
+    add esp, 8
+    sti
+    iret
+
 section .note.GNU-stack
     align 4
     db 0
