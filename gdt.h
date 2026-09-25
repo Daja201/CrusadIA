@@ -52,6 +52,9 @@ typedef struct tss_entry_struct tss_entry_t;
 void init_gdt(void);
 
 void tss_set_kernel_stack(uint32_t esp0);
+void tss_allow_port(uint16_t port);
+void tss_allow_io_range(uint16_t base_port, uint16_t count);
+void tss_deny_port(uint16_t port);
 
 void __attribute__((noreturn)) enter_usermode(uint32_t entry, uint32_t user_stack);
 

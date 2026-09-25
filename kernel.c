@@ -81,7 +81,8 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     klog_status("FILESYSTEM OK", 0x00FF00);
     timer_init(1000); 
     init_multitasking();
-    create_task(system_main_task, 2); 
+    tss_allow_io_range(0x70, 2);
+    create_user_task(system_main_task, 2); 
     klog_status("MULTITASKING OK", 0x00FF00);
     ac97_init();
     klog_status("AC97 DRIVER OK", 0x00FF00);

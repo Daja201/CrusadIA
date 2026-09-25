@@ -3,10 +3,16 @@
 #include "klog.h"
 
 #define GDT_ENTRIES 7
+#define IO_BITMAP_SIZE 8193
+
+typedef struct {
+    tss_entry_t tss;
+    uint8_t io_bitmap[IO_BITMAP_SIZE];
+} __attribute__((packed)) full_tss_t;
 
 static gdt_entry_t gdt[GDT_ENTRIES];
 static gdt_ptr_t   gdt_ptr;
-static tss_entry_t tss;
+static full_tss_t  sys_tss;
 
 #define DEFAULT_KSTACK_SIZE 8192
 static uint8_t default_kernel_stack[DEFAULT_KSTACK_SIZE] __attribute__((aligned(16)));
@@ -45,17 +51,18 @@ static void gdt_flush(void) {
 }
 
 static void write_tss(int32_t num, uint16_t ss0, uint32_t esp0) {
-    uint32_t base  = (uint32_t)&tss;
-    uint32_t limit = base + sizeof(tss_entry_t);
+    uint32_t base  = (uint32_t)&sys_tss;
+    uint32_t limit = sizeof(full_tss_t) - 1;
 
     gdt_set_gate(num, base, limit, 0xE9, 0x00);
 
-    memset(&tss, 0, sizeof(tss_entry_t));
-    tss.ss0  = ss0;
-    tss.esp0 = esp0;
-    tss.cs = GDT_KERNEL_CODE_SEL;
-    tss.ss = tss.ds = tss.es = tss.fs = tss.gs = GDT_KERNEL_DATA_SEL;
-    tss.iomap_base = sizeof(tss_entry_t);
+    memset(&sys_tss, 0, sizeof(full_tss_t));
+    memset(sys_tss.io_bitmap, 0xFF, IO_BITMAP_SIZE);
+    sys_tss.tss.ss0  = ss0;
+    sys_tss.tss.esp0 = esp0;
+    sys_tss.tss.cs = GDT_KERNEL_CODE_SEL;
+    sys_tss.tss.ss = sys_tss.tss.ds = sys_tss.tss.es = sys_tss.tss.fs = sys_tss.tss.gs = GDT_KERNEL_DATA_SEL;
+    sys_tss.tss.iomap_base = sizeof(tss_entry_t);
 }
 
 void init_gdt(void) {
@@ -77,7 +84,21 @@ void init_gdt(void) {
 }
 
 void tss_set_kernel_stack(uint32_t esp0) {
-    tss.esp0 = esp0;
+    sys_tss.tss.esp0 = esp0;
+}
+
+void tss_allow_port(uint16_t port) {
+    sys_tss.io_bitmap[port / 8] &= ~(uint8_t)(1 << (port % 8));
+}
+
+void tss_deny_port(uint16_t port) {
+    sys_tss.io_bitmap[port / 8] |= (uint8_t)(1 << (port % 8));
+}
+
+void tss_allow_io_range(uint16_t base_port, uint16_t count) {
+    for (uint16_t i = 0; i < count; i++) {
+        tss_allow_port(base_port + i);
+    }
 }
 
 void __attribute__((noreturn)) enter_usermode(uint32_t entry, uint32_t user_stack) {

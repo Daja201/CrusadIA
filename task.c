@@ -54,9 +54,7 @@ uint32_t schedule_handler(uint32_t esp) {
 
     if (ticks_left_on_current > 0) {
         ticks_left_on_current--;
-        if (tasks[current_task].is_user) {
-            tss_set_kernel_stack(tasks[current_task].kernel_stack_top);
-        }
+        tss_set_kernel_stack(tasks[current_task].kernel_stack_top);
         return tasks[current_task].esp;
     }
 
@@ -73,9 +71,7 @@ uint32_t schedule_handler(uint32_t esp) {
     uint32_t p = tasks[current_task].priority;
     ticks_left_on_current = (p > 0) ? (p - 1) : 0;
 
-    if (tasks[current_task].is_user) {
-        tss_set_kernel_stack(tasks[current_task].kernel_stack_top);
-    }
+    tss_set_kernel_stack(tasks[current_task].kernel_stack_top);
 
     return tasks[current_task].esp;
 }
@@ -103,7 +99,7 @@ void create_task(void (*entry_point)(), uint32_t priority) {
     tasks[slot].state = TASK_READY;
     tasks[slot].priority = priority;
     tasks[slot].is_user = 0;
-    tasks[slot].kernel_stack_top = 0;
+    tasks[slot].kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_KSTACK_SIZE);
 }
 
 void create_user_task(void (*entry_point)(), uint32_t priority) {
