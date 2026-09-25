@@ -2,7 +2,7 @@
 #define TCCPORT_STDIO_H
 #include <stddef.h>
 #include <stdarg.h>
-#include <fs.h>        /* FILE fopen fread fwrite fclose fseek ftell feof */
+#include <fs.h>    
 #ifndef TCCPORT_SSIZE_T
 #define TCCPORT_SSIZE_T
 typedef long ssize_t;
