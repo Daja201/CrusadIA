@@ -82,6 +82,8 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     timer_init(1000); 
     init_multitasking();
     tss_allow_io_range(0x70, 2);
+    tss_allow_io_range(0x1F0, 8);
+    tss_allow_io_range(0x170, 8);
     create_user_task(system_main_task, 2); 
     klog_status("MULTITASKING OK", 0x00FF00);
     ac97_init();

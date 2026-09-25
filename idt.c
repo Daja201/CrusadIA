@@ -4,6 +4,7 @@
 #include "string.h"
 #include "klog.h"
 #include "vesa.h"
+#include "task.h"
 
 extern uint32_t boot_fb_addr; 
 extern uint32_t boot_fb_width;
@@ -101,6 +102,9 @@ void init_idt() {
     asm volatile("lidt %0" : : "m"(idt_ptr));
 }
 
+extern task_t tasks[];
+extern int current_task;
+
 void fault_handler(registers_t *regs) {
     if (regs->int_no >= 32 && regs->int_no <= 47) {
         if (regs->int_no >= 40) outb(0xA0, 0x20);
@@ -109,6 +113,14 @@ void fault_handler(registers_t *regs) {
         return;
     }
     if (regs->int_no < 32) {
+        if ((regs->cs & 3) == 3 && current_task >= 0) {
+            klogf_color("TASK %d KILLED: exception %d at eip 0x%x err 0x%x\n", 0xFF0000,
+                        tasks[current_task].pid, regs->int_no, regs->eip, regs->err_code);
+            tasks[current_task].state = TASK_DEAD;
+            for (;;) {
+                asm volatile("sti; hlt");
+            }
+        }
         asm volatile("cli");
         
         if (boot_fb_addr != 0) {
