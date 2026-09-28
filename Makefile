@@ -145,3 +145,6 @@ a:
 	FINISHED
 d: 	
 	qemu-system-i386 -cdrom os.iso -no-reboot -d int,cpu_reset
+
+dsm:
+	git submodule update --init --recursive
