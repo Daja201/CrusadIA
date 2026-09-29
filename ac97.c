@@ -4,7 +4,8 @@
 #include "pci.h"
 #include "klog.h"
 #include "io.h"
-#include "fs.h"
+#include "vfs.h"
+#include "fcntl.h"
 #include "task.h"
 #include "string.h"
 #include <stdint.h>
@@ -13,15 +14,9 @@
 #define CHUNK_SECTORS 256 //how many storage sectors need to be read from drive (wav, not whole waw at once)
 #define BDL_ENTRIES 32 //based on ac97 specs
 
-extern void select_drive(uint16_t base, uint8_t slave);
-extern void block_read(uint32_t lba, uint8_t* buf);
-
 extern uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 extern void pci_config_write(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 pci_device_t g_dev;
-extern uint32_t g_current_dir;
-extern void read_inode(int idx, inode_t* inode);
-extern int fs_resolve_path(const char* path, uint32_t current_dir_inode);
 
 struct ac97_bdl_entry {
     uint32_t buffer_addr;
@@ -226,21 +221,11 @@ void play_wav_file_jmp(const char* filename) {
     create_task(play_wav_file_entry, 1);
 }
 
-int play_wav_file(const char* filename) {
-    ac97_play_test_tone();
-    if (ac97_init() != 0) {
-        return -1;
-    }
-    int inode_num = fs_resolve_path(filename, g_current_dir);
-    if (inode_num < 0) {
-        kklogf_color("WAV: %s not found\n", 0x00FF00, filename);
-        return -1;
-    }
-    inode_t file_node;
-    read_inode(inode_num, &file_node);
+static int play_wav_stream(int wav_fd, const char* filename) {
+    uint32_t wav_size = (uint32_t)vfs_fsize(wav_fd);
 
     uint8_t riff_hdr[12];
-    fs_read((uint32_t)inode_num, &file_node, 0, sizeof(riff_hdr), riff_hdr);
+    vfs_pread(wav_fd, 0, riff_hdr, sizeof(riff_hdr));
     if (riff_hdr[0] != 'R' || riff_hdr[1] != 'I' || riff_hdr[2] != 'F' || riff_hdr[3] != 'F' ||
         riff_hdr[8] != 'W' || riff_hdr[9] != 'A' || riff_hdr[10] != 'V' || riff_hdr[11] != 'E') {
         kklog("WAV: Invalid format\n");
@@ -252,15 +237,15 @@ int play_wav_file(const char* filename) {
     uint32_t total_data = 0;
     uint32_t wav_sample_rate = 48000;
     uint16_t wav_channels = 2;
-    while (chunk_offset + 8 <= file_node.size) {
+    while (chunk_offset + 8 <= wav_size) {
         uint8_t chunk_hdr[8];
-        fs_read((uint32_t)inode_num, &file_node, chunk_offset, sizeof(chunk_hdr), chunk_hdr);
+        vfs_pread(wav_fd, chunk_offset, chunk_hdr, sizeof(chunk_hdr));
         uint32_t chunk_size;
         memcpy(&chunk_size, chunk_hdr + 4, 4);
         if (memcmp(chunk_hdr, "fmt ", 4) == 0) {
             uint8_t fmt[16];
             uint32_t fmt_len = chunk_size < sizeof(fmt) ? chunk_size : sizeof(fmt);
-            fs_read((uint32_t)inode_num, &file_node, chunk_offset + 8, fmt_len, fmt);
+            vfs_pread(wav_fd, chunk_offset + 8, fmt, fmt_len);
             if (fmt_len >= 16) {
                 memcpy(&wav_channels, fmt + 2, 2);
                 memcpy(&wav_sample_rate, fmt + 4, 4);
@@ -277,8 +262,8 @@ int play_wav_file(const char* filename) {
         return -1;
     }
     if (wav_channels == 0) wav_channels = 2;
-    if (data_offset + total_data > file_node.size) {
-        total_data = file_node.size - data_offset;
+    if (data_offset + total_data > wav_size) {
+        total_data = wav_size - data_offset;
     }
 
     if (wav_channels != 2) {
@@ -324,7 +309,8 @@ int play_wav_file(const char* filename) {
             uint32_t want = remaining;
             if (want > CHUNK_SIZE) want = CHUNK_SIZE;
             int idx = filled_total % BDL_ENTRIES;
-            uint32_t got = fs_read((uint32_t)inode_num, &file_node, offset, want, stream_bufs[idx]);
+            long rd = vfs_pread(wav_fd, offset, stream_bufs[idx], want);
+            uint32_t got = rd > 0 ? (uint32_t)rd : 0;
             if (got == 0) {
                 remaining = 0;
                 break;
@@ -378,4 +364,19 @@ int play_wav_file(const char* filename) {
         kklog("WAV: Finished.\n");
     }
     return 0;
+}
+
+int play_wav_file(const char* filename) {
+    ac97_play_test_tone();
+    if (ac97_init() != 0) {
+        return -1;
+    }
+    int wav_fd = vfs_open(filename, O_RDONLY);
+    if (wav_fd < 0) {
+        kklogf_color("WAV: %s: %s\n", 0x00FF00, filename, vfs_strerror(wav_fd));
+        return -1;
+    }
+    int rc = play_wav_stream(wav_fd, filename);
+    vfs_close(wav_fd);
+    return rc;
 }

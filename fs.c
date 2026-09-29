@@ -2,13 +2,7 @@
 #include "fs.h"
 #include <stdint.h>
 #include "string.h"
-#include "string.h"
 #include "io.h"
-#include "terminal.h"
-#include "heap.h"
-#include "fcntl.h"
-#include "unistd.h"
-#include "sys/stat.h"
 
 #define ATA_PRIMARY 0x1F0
 #define ATA_SECONDARY 0x170
@@ -30,9 +24,6 @@
 #define ROOT_INODE 0
 #define PTRS_PER_BLOCK (SECTOR_SIZE / sizeof(uint32_t))
 
-static inline void disk_lock(void)   { asm volatile("cli"); }
-static inline void disk_unlock(void) { asm volatile("sti"); }
-
 uint32_t g_current_dir = 0;
 uint8_t inode_bitmap[INODE_BITMAP_SIZE];
 static uint16_t current_ata_base = ATA_PRIMARY;
@@ -47,7 +38,6 @@ static uint32_t block_bitmap_bytes = 0;
 static uint8_t block_bitmap_static[BLOCK_BITMAP_MAX_SIZE];
 uint8_t *block_bitmap = block_bitmap_static;
 int g_current_drive = 0;
-extern char g_current_path[];
 
 struct dirent {
     uint32_t inode;
@@ -74,27 +64,41 @@ static void clear_block_bitmap_bit(uint32_t idx) {
 
 int ata_wait_busy(uint16_t base) {
     uint32_t timeout = 1000000;
-    while ((inb(base + 7) & 0x80) && --timeout);
-    return (timeout == 0) ? -1 : 0;
+    while (timeout--) {
+        uint8_t status = inb(base + ATA_REG_STATUS);
+        if (status == 0 || status == 0xFF) return -1;
+        if (!(status & 0x80)) return 0;
+    }
+    return -1;
 }
 
 int ata_wait_drq(uint16_t base) {
     uint32_t timeout = 1000000;
-    while (!(inb(base + 7) & 0x08) && --timeout);
-    return (timeout == 0) ? -1 : 0;
+    while (timeout--) {
+        uint8_t status = inb(base + ATA_REG_STATUS);
+        if (status == 0 || status == 0xFF) return -1;
+        if (status & 0x08) return 0;
+    }
+    return -1;
 }
 
 void block_read(uint32_t lba, uint8_t* buf) {
     uint8_t drive_sel = (current_is_slave ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F);
     outb(current_ata_base + ATA_REG_DRIVE, drive_sel);
     for(int i = 0; i < 4; i++) inb(current_ata_base + ATA_REG_STATUS);
-    ata_wait_busy(current_ata_base);
+    if (ata_wait_busy(current_ata_base) < 0) {
+        memset(buf, 0, SECTOR_SIZE);
+        return;
+    }
     outb(current_ata_base + ATA_REG_SECCOUNT, 1);
     outb(current_ata_base + ATA_REG_LBA0, lba & 0xFF);
     outb(current_ata_base + ATA_REG_LBA1, (lba >> 8) & 0xFF);
     outb(current_ata_base + ATA_REG_LBA2, (lba >> 16) & 0xFF);
     outb(current_ata_base + ATA_REG_CMD, ATA_CMD_READ);
-    ata_wait_drq(current_ata_base);
+    if (ata_wait_drq(current_ata_base) < 0) {
+        memset(buf, 0, SECTOR_SIZE);
+        return;
+    }
     insw(current_ata_base + ATA_REG_DATA, buf, SECTOR_SIZE / 2);
 }
 
@@ -102,14 +106,32 @@ void block_write(uint32_t lba, const uint8_t* buf) {
     uint8_t drive_sel = (current_is_slave ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F);
     outb(current_ata_base + ATA_REG_DRIVE, drive_sel);
     for(int i = 0; i < 4; i++) inb(current_ata_base + ATA_REG_STATUS);
-    ata_wait_busy(current_ata_base);
+    if (ata_wait_busy(current_ata_base) < 0) return;
     outb(current_ata_base + ATA_REG_SECCOUNT, 1);
     outb(current_ata_base + ATA_REG_LBA0, lba & 0xFF);
     outb(current_ata_base + ATA_REG_LBA1, (lba >> 8) & 0xFF);
     outb(current_ata_base + ATA_REG_LBA2, (lba >> 16) & 0xFF);
     outb(current_ata_base + ATA_REG_CMD, ATA_CMD_WRITE);    
-    ata_wait_drq(current_ata_base);
+    if (ata_wait_drq(current_ata_base) < 0) return;
     outsw(current_ata_base + ATA_REG_DATA, buf, SECTOR_SIZE / 2);
+}
+
+static void flush_block_bitmap_sector(uint32_t idx) {
+    uint32_t sector = (idx / 8) / SECTOR_SIZE;
+    if (sector >= block_bitmap_sectors) return;
+    uint8_t tmp[SECTOR_SIZE];
+    uint32_t start = sector * SECTOR_SIZE;
+    uint32_t left = block_bitmap_bytes > start ? block_bitmap_bytes - start : 0;
+    uint32_t n = left > SECTOR_SIZE ? SECTOR_SIZE : left;
+    memset(tmp, 0, SECTOR_SIZE);
+    if (n) memcpy(tmp, block_bitmap + start, n);
+    block_write(g_superblock.bitmap_start + sector, tmp);
+}
+
+static void flush_inode_bitmap_sector(uint32_t idx) {
+    uint32_t sector = (idx / 8) / SECTOR_SIZE;
+    if (sector >= inode_bitmap_sectors) return;
+    block_write(g_superblock.bitmap_start + block_bitmap_sectors + sector, inode_bitmap + sector * SECTOR_SIZE);
 }
 
 int alloc_block() {
@@ -121,7 +143,7 @@ int alloc_block() {
     for (uint32_t i = start_idx; i < g_superblock.total_blocks; i++) {
         if (!get_block_bitmap_bit(i)) {
             set_block_bitmap_bit(i);
-            save_block_bitmap(); 
+            flush_block_bitmap_sector(i);
             return (int)i;
         }
     }
@@ -130,7 +152,7 @@ int alloc_block() {
 
 void free_block(uint32_t idx) {
     clear_block_bitmap_bit(idx);
-    save_block_bitmap(); 
+    flush_block_bitmap_sector(idx);
 }
 
 void create_root() {
@@ -196,7 +218,11 @@ void select_drive(uint16_t base, uint8_t slave) {
     current_is_slave = slave;
     outb(base + ATA_REG_DRIVE, 0xA0 | (slave << 4));
     for(int i = 0; i < 4; i++) inb(base + ATA_REG_STATUS);
-    while (inb(base + ATA_REG_STATUS) & 0x80); 
+    uint32_t timeout = 1000000;
+    while (timeout--) {
+        uint8_t status = inb(base + ATA_REG_STATUS);
+        if (status == 0 || status == 0xFF || !(status & 0x80)) return;
+    }
 }
 
 static uint32_t ata_get_total_sectors_dev(uint16_t base, uint8_t is_slave) {
@@ -339,9 +365,6 @@ void create_defdirs() {
     fs_create_dir("mount", g_current_dir);
     fs_create_dir("lock", g_current_dir);
     fs_create_dir("cosfiles", g_current_dir);
-    strcpy(g_current_path, ">");
-    strcat(g_current_path, "user");
-    int result = fs_cd("user");
 }
 
 void init_fs() {
@@ -390,7 +413,7 @@ int alloc_inode() {
     for (uint32_t i = 0; i < g_superblock.inode_count; i++) {
         if (!(inode_bitmap[i / 8] & (1 << (i % 8)))) {
             inode_bitmap[i / 8] |= (1 << (i % 8));
-            save_inode_bitmap();
+            flush_inode_bitmap_sector(i);
             return (int)i;
         }
     }
@@ -400,7 +423,7 @@ int alloc_inode() {
 void free_inode(int idx) {
     if (idx < 0 || (uint32_t)idx >= g_superblock.inode_count) return;
     inode_bitmap[idx / 8] &= ~(1 << (idx % 8));
-    save_inode_bitmap();
+    flush_inode_bitmap_sector((uint32_t)idx);
 }
 
 int dir_lookup(inode_t* dir, const char* name) {
@@ -638,44 +661,65 @@ void free_indirect_tree(uint32_t block_lba, int depth) {
     free_block(block_lba);
 }
 
-int fs_delete_file(const char* name) {
-    inode_t root;
-    read_inode(ROOT_INODE, &root);    
-    int inode_num = dir_lookup(&root, name);
-    if (inode_num < 0) {
-        return -1;
-    }
-    inode_t node;
-    read_inode(inode_num, &node);
-    for (int i = 0; i < INODE_DIRECT; i++) {
-        if (node.direct[i] != 0) {
-            free_block(node.direct[i]);
-            node.direct[i] = 0;
+int fs_dir_is_empty(uint32_t inode_idx) {
+    inode_t dir;
+    read_inode((int)inode_idx, &dir);
+    if (dir.type != 2) return 0;
+
+    uint8_t buf[SECTOR_SIZE];
+    int entries_per_block = SECTOR_SIZE / sizeof(struct dirent);
+    for (int b = 0; b < INODE_DIRECT; b++) {
+        if (dir.direct[b] == 0) continue;
+        block_read(dir.direct[b], buf);
+        struct dirent* entries = (struct dirent*)buf;
+        for (int i = 0; i < entries_per_block; i++) {
+            if (entries[i].inode != 0 && entries[i].inode < g_superblock.inode_count) return 0;
         }
     }
-    if (node.single_indirect != 0) {
-        free_indirect_tree(node.single_indirect, 1);
-        node.single_indirect = 0;
+    return 1;
+}
+
+static void fs_free_inode_data(inode_t* node) {
+    for (int i = 0; i < INODE_DIRECT; i++) {
+        if (node->direct[i] != 0) free_block(node->direct[i]);
     }
-    if (node.double_indirect != 0) {
-        free_indirect_tree(node.double_indirect, 2);
-        node.double_indirect = 0;
-    }
-    if (node.triple_indirect != 0) {
-        free_indirect_tree(node.triple_indirect, 3);
-        node.triple_indirect = 0;
-    }
+    if (node->single_indirect != 0) free_indirect_tree(node->single_indirect, 1);
+    if (node->double_indirect != 0) free_indirect_tree(node->double_indirect, 2);
+    if (node->triple_indirect != 0) free_indirect_tree(node->triple_indirect, 3);
+}
+
+int fs_delete_in(uint32_t parent_inode_idx, const char* name) {
+    inode_t parent;
+    read_inode((int)parent_inode_idx, &parent);
+    if (parent.type != 2) return -1;
+
+    int inode_num = dir_lookup(&parent, name);
+    if (inode_num <= 0) return -1;
+    inode_t node;
+    read_inode(inode_num, &node);
+    if (node.type == 2 && !fs_dir_is_empty((uint32_t)inode_num)) return -1;
+    if (dir_remove(&parent, name) < 0) return -1;
+
+    fs_free_inode_data(&node);
     free_inode(inode_num);
-    dir_remove(&root, name);
     return 0;
 }
 
+int fs_delete_file(const char* name) {
+    inode_t root;
+    read_inode(ROOT_INODE, &root);
+    int inode_num = dir_lookup(&root, name);
+    if (inode_num <= 0) return -1;
+    inode_t node;
+    read_inode(inode_num, &node);
+    if (node.type == 2) return -1;
+    return fs_delete_in(ROOT_INODE, name);
+}
+
 uint32_t fs_read(uint32_t inode_idx, inode_t* node, uint32_t offset, uint32_t size, uint8_t* buffer) {
-    disk_lock();
     uint32_t bytes_read = 0;
     uint8_t sector_buf[512];
     if (offset >= node->size) {
-        disk_unlock();
         return 0;
     }
     if (offset + size > node->size) {
@@ -698,7 +742,6 @@ uint32_t fs_read(uint32_t inode_idx, inode_t* node, uint32_t offset, uint32_t si
         memcpy(buffer + bytes_read, sector_buf + offset_in_block, chunk_size);
         bytes_read += chunk_size;
     }
-    disk_unlock();
     return bytes_read;
 }
 
@@ -763,93 +806,6 @@ int fs_resolve_path(const char* path, uint32_t current_dir_inode) {
     return dir_lookup(&dir, path);
 }
 
-FILE* fopen(const char* path, const char* mode) {
-    int writable = (strchr(mode, 'w') != 0) || (strchr(mode, 'a') != 0) || (strchr(mode, '+') != 0);
-    int creating = (strchr(mode, 'w') != 0);
-
-    inode_t dir;
-    read_inode(g_current_dir, &dir);
-    int inode_num = dir_lookup(&dir, path);
-
-    if (inode_num < 0) {
-        if (!writable) return 0;
-        uint32_t created = fs_create_file(path, "tcc");
-        if ((int32_t)created < 0) return 0;
-        inode_num = (int)created;
-    } else if (creating) {
-        fs_delete_file(path);
-        uint32_t created = fs_create_file(path, "tcc");
-        if ((int32_t)created < 0) return 0;
-        inode_num = (int)created;
-    }
-
-    FILE* f = (FILE*)malloc(sizeof(FILE));
-    if (!f) return 0;
-    f->inode_idx = (uint32_t)inode_num;
-    read_inode(inode_num, &f->node);
-    f->pos = 0;
-    f->eof = 0;
-    f->writable = writable;
-
-    if (mode[0] == 'a') f->pos = f->node.size;
-
-    return f;
-}
-
-size_t fread(void* ptr, size_t size, size_t nmemb, FILE* f) {
-    if (!f || size == 0 || nmemb == 0) return 0;
-    uint32_t want = (uint32_t)(size * nmemb);
-    uint32_t got = fs_read(f->inode_idx, &f->node, f->pos, want, (uint8_t*)ptr);
-    if ((int32_t)got <= 0) {
-        f->eof = 1;
-        return 0;
-    }
-    f->pos += got;
-    if (got < want) f->eof = 1;
-    return got / size;
-}
-
-size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* f) {
-    if (!f || !f->writable || size == 0 || nmemb == 0) return 0;
-    uint32_t want = (uint32_t)(size * nmemb);
-    int written = fs_write(f->inode_idx, f->pos, (const uint8_t*)ptr, want);
-    if (written < 0) return 0;
-    f->pos += (uint32_t)written;
-    read_inode(f->inode_idx, &f->node);
-    return (size_t)written / size;
-}
-
-int fclose(FILE* f) {
-    if (!f) return -1;
-    free(f);
-    return 0;
-}
-
-int fseek(FILE* f, long offset, int whence) {
-    if (!f) return -1;
-    long base = 0;
-    if (whence == SEEK_SET) base = 0;
-    else if (whence == SEEK_CUR) base = (long)f->pos;
-    else if (whence == SEEK_END) base = (long)f->node.size;
-    else return -1;
-
-    long target = base + offset;
-    if (target < 0) return -1;
-    f->pos = (uint32_t)target;
-    f->eof = 0;
-    return 0;
-}
-
-long ftell(FILE* f) {
-    if (!f) return -1;
-    return (long)f->pos;
-}
-
-int feof(FILE* f) {
-    if (!f) return 1;
-    return f->eof;
-}
-
 int fs_cd(const char* name) {
     if (strcmp(name, "..") == 0) {
         g_current_dir = 0;
@@ -861,102 +817,7 @@ int fs_cd(const char* name) {
     if (target_idx == -1) return -1;
     inode_t target;
     read_inode(target_idx, &target);
-    if (target.type != 2) return -2; 
+    if (target.type != 2) return -2;
     g_current_dir = (uint32_t)target_idx;
-    return 0;
-}
-#define MAX_OPEN_FDS 32
-static FILE* fd_table[MAX_OPEN_FDS];
-
-static int fd_alloc(FILE* f) {
-    for (int i = 0; i < MAX_OPEN_FDS; i++) {
-        if (!fd_table[i]) {
-            fd_table[i] = f;
-            return i;
-        }
-    }
-    return -1;
-}
-
-int open(const char* path, int flags, ...) {
-    const char* mode;
-    if (flags & O_TRUNC) {
-        mode = "w";
-    } else if (flags & O_APPEND) {
-        mode = "a";
-    } else if (flags & (O_WRONLY | O_RDWR)) {
-        mode = (flags & O_CREAT) ? "w+" : "r+";
-    } else {
-        mode = "r";
-    }
-
-    FILE* f = fopen(path, mode);
-    if (!f) return -1;
-
-    int fd = fd_alloc(f);
-    if (fd < 0) {
-        fclose(f);
-        return -1;
-    }
-    return fd;
-}
-
-int close(int fd) {
-    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
-    fclose(fd_table[fd]);
-    fd_table[fd] = 0;
-    return 0;
-}
-
-FILE *fdopen(int fd, const char *mode) {
-    (void)mode;
-    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return 0;
-    return fd_table[fd];
-}
-
-long read(int fd, void* buf, size_t count) {
-    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
-    return (long)fread(buf, 1, count, fd_table[fd]);
-}
-
-long write(int fd, const void* buf, size_t count) {
-    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
-    return (long)fwrite(buf, 1, count, fd_table[fd]);
-}
-
-long lseek(int fd, long offset, int whence) {
-    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd]) return -1;
-    if (fseek(fd_table[fd], offset, whence) < 0) return -1;
-    return ftell(fd_table[fd]);
-}
-
-int unlink(const char* path) {
-    return fs_delete_file(path) < 0 ? -1 : 0;
-}
-
-char* getcwd(char* buf, size_t size) {
-    if (!buf || size < 2) return 0;
-    buf[0] = '/';
-    buf[1] = '\0';
-    return buf;
-}
-
-int fstat(int fd, struct stat* st) {
-    if (fd < 0 || fd >= MAX_OPEN_FDS || !fd_table[fd] || !st) return -1;
-    st->st_size = fd_table[fd]->node.size;
-    st->st_mode = (fd_table[fd]->node.type == 2) ? S_IFDIR : S_IFREG;
-    return 0;
-}
-
-int stat(const char* path, struct stat* st) {
-    if (!st) return -1;
-    inode_t dir;
-    read_inode(g_current_dir, &dir);
-    int idx = dir_lookup(&dir, path);
-    if (idx < 0) return -1;
-    inode_t node;
-    read_inode(idx, &node);
-    st->st_size = node.size;
-    st->st_mode = (node.type == 2) ? S_IFDIR : S_IFREG;
     return 0;
 }

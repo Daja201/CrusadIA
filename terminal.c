@@ -32,6 +32,9 @@ void execute_command(char* line) {
         while (*p && *p != ' ') p++;
         if (*p) *p++ = 0;
     }
+    if (argc == 0) {
+        return;
+    }
     for (int i = 0; i < command_count; i++) { 
         if (strcmp(argv[0], commands[i].name) == 0) {
             commands[i].func(argc, argv);

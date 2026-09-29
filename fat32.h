@@ -13,6 +13,7 @@
 #define FAT32_ATTR_DIR      0x10
 #define FAT32_ATTR_ARCHIVE  0x20
 #define FAT32_ATTR_LFN      0x0F
+#define FAT32_MAX_LFN_ENTRIES 20
 
 #define FAT32_CLUSTER_FREE  0x00000000
 #define FAT32_CLUSTER_EOC   0x0FFFFFF8
@@ -62,6 +63,7 @@ int fat32_append_file(uint32_t dir_cluster, const char* name, const uint8_t* dat
 int fat32_create_dir(uint32_t dir_cluster, const char* name);
 
 int fat32_delete_file(uint32_t dir_cluster, const char* name);
+int fat32_remove_dir(uint32_t dir_cluster, const char* name);
 
 extern fat32_fs_t g_fat32;
 

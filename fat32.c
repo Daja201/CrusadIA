@@ -64,6 +64,17 @@ typedef struct {
     uint16_t first_cluster_lo;
     uint32_t file_size;
 } fat32_direntry_t;
+
+typedef struct {
+    uint8_t  order;
+    uint16_t name1[5];
+    uint8_t  attr;
+    uint8_t  type;
+    uint8_t  checksum;
+    uint16_t name2[6];
+    uint16_t first_cluster_lo;
+    uint16_t name3[2];
+} fat32_lfnentry_t;
 #pragma pack(pop)
 
 #define DIRENTS_PER_SECTOR (FAT32_SECTOR_SIZE / sizeof(fat32_direntry_t))
@@ -158,7 +169,185 @@ static void name_to_83(const char* name, uint8_t out[11]) {
     }
 }
 
+static int is_valid_83_char(char c) {
+    if (c >= 'A' && c <= 'Z') return 1;
+    if (c >= '0' && c <= '9') return 1;
+    switch (c) {
+        case '$': case '%': case '\'': case '-': case '_': case '@':
+        case '~': case '`': case '!': case '(': case ')': case '{':
+        case '}': case '^': case '#': case '&':
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int name_needs_lfn(const char* name) {
+    if (!name[0]) return 1;
+    int i = 0, base_len = 0;
+    while (name[i] && name[i] != '.') {
+        char c = name[i];
+        if (c >= 'a' && c <= 'z') return 1;
+        if (!is_valid_83_char(up(c))) return 1;
+        base_len++; i++;
+    }
+    if (base_len == 0 || base_len > 8) return 1;
+    if (name[i] == '.') {
+        i++;
+        int ext_len = 0;
+        while (name[i]) {
+            if (name[i] == '.') return 1;
+            char c = name[i];
+            if (c >= 'a' && c <= 'z') return 1;
+            if (!is_valid_83_char(up(c))) return 1;
+            ext_len++; i++;
+        }
+        if (ext_len == 0 || ext_len > 3) return 1;
+    }
+    return 0;
+}
+
+static void base_ext_from_name(const char* name, char base[9], char ext[4]) {
+    int i = 0, bi = 0;
+    while (name[i] && name[i] != '.' && bi < 8) {
+        char c = up(name[i]);
+        if (!is_valid_83_char(c)) c = '_';
+        base[bi++] = c; i++;
+    }
+    base[bi] = '\0';
+    while (name[i] && name[i] != '.') i++;
+    ext[0] = '\0';
+    if (name[i] == '.') {
+        i++;
+        int ei = 0;
+        while (name[i] && ei < 3) {
+            char c = up(name[i]);
+            if (!is_valid_83_char(c)) c = '_';
+            ext[ei++] = c; i++;
+        }
+        ext[ei] = '\0';
+    }
+}
+
+struct short_exists_ctx { const uint8_t* target11; int exists; };
+
+static int short_exists_cb(fat32_direntry_t* de, uint32_t lba, int slot, void* vctx) {
+    (void)lba; (void)slot;
+    struct short_exists_ctx* ctx = (struct short_exists_ctx*)vctx;
+    if (de->name[0] == 0x00) return 1;
+    if (de->name[0] == 0xE5) return 0;
+    if (de->attr == FAT32_ATTR_LFN) return 0;
+    if (memcmp(de->name, ctx->target11, 11) == 0) { ctx->exists = 1; return 1; }
+    return 0;
+}
+
 typedef int (*dirent_cb)(fat32_direntry_t* de, uint32_t sector_lba, int slot, void* ctx);
+static void for_each_dirent(uint32_t dir_cluster, dirent_cb cb, void* ctx);
+
+static int short_name_exists(uint32_t dir_cluster, const uint8_t name11[11]) {
+    struct short_exists_ctx ctx = { name11, 0 };
+    for_each_dirent(dir_cluster, short_exists_cb, &ctx);
+    return ctx.exists;
+}
+
+static void gen_short_name(uint32_t dir_cluster, const char* name, uint8_t out[11]) {
+    char base[9], ext[4];
+    base_ext_from_name(name, base, ext);
+    if (base[0] == '\0') { base[0] = '_'; base[1] = '\0'; }
+
+    for (int n = 1; n <= 999999; n++) {
+        char digits[7]; int dn = 0;
+        uint32_t v = (uint32_t)n;
+        while (v > 0) { digits[dn++] = (char)('0' + (v % 10)); v /= 10; }
+        char tail[8]; int tlen = 0;
+        tail[tlen++] = '~';
+        for (int k = dn - 1; k >= 0; k--) tail[tlen++] = digits[k];
+        tail[tlen] = '\0';
+
+        int max_base = 8 - tlen;
+        if (max_base < 1) max_base = 1;
+        int blen = (int)strlen(base);
+        if (blen > max_base) blen = max_base;
+
+        memset(out, ' ', 11);
+        memcpy(out, base, blen);
+        memcpy(out + blen, tail, tlen);
+        for (int k = 0; ext[k]; k++) out[8 + k] = (uint8_t)ext[k];
+
+        if (!short_name_exists(dir_cluster, out)) return;
+    }
+}
+
+static uint8_t lfn_checksum(const uint8_t short_name[11]) {
+    uint8_t sum = 0;
+    for (int i = 0; i < 11; i++) {
+        sum = (uint8_t)(((sum & 1) << 7) + (sum >> 1) + short_name[i]);
+    }
+    return sum;
+}
+
+typedef struct {
+    char     buf[FAT32_MAX_NAME];
+    int      len;
+    uint8_t  chk;
+    int      have;
+    uint32_t lbas[FAT32_MAX_LFN_ENTRIES];
+    int      slots[FAT32_MAX_LFN_ENTRIES];
+    int      count;
+} lfn_state_t;
+
+static void lfn_reset(lfn_state_t* s) {
+    s->buf[0] = '\0';
+    s->len = 0;
+    s->chk = 0;
+    s->have = 0;
+    s->count = 0;
+}
+
+static void lfn_add(lfn_state_t* s, fat32_lfnentry_t* le, uint32_t lba, int slot) {
+    int ord = le->order & 0x1F;
+    if (ord < 1 || ord > FAT32_MAX_LFN_ENTRIES) { lfn_reset(s); return; }
+    if (le->order & 0x40) {
+        lfn_reset(s);
+        s->have = 1;
+        s->chk = le->checksum;
+        s->len = ord * 13;
+        if (s->len > FAT32_MAX_NAME - 1) s->len = FAT32_MAX_NAME - 1;
+        s->buf[s->len] = '\0';
+    } else if (!s->have || le->checksum != s->chk) {
+        lfn_reset(s);
+        return;
+    }
+    s->lbas[ord - 1] = lba;
+    s->slots[ord - 1] = slot;
+    if (ord > s->count) s->count = ord;
+
+    int pos = (ord - 1) * 13;
+    uint16_t units[13];
+    memcpy(&units[0], le->name1, 10);
+    memcpy(&units[5], le->name2, 12);
+    memcpy(&units[11], le->name3, 4);
+    for (int i = 0; i < 13 && pos + i < FAT32_MAX_NAME - 1; i++) {
+        uint16_t u = units[i];
+        if (u == 0x0000) {
+            if (pos + i < s->len) s->buf[pos + i] = '\0';
+            break;
+        }
+        if (u == 0xFFFF) continue;
+        s->buf[pos + i] = (u < 0x80) ? (char)u : '?';
+    }
+}
+
+static void lfn_take(lfn_state_t* s, fat32_direntry_t* de, char* out) {
+    uint8_t chk = lfn_checksum(de->name);
+    if (s->have && s->chk == chk && s->count > 0 && s->buf[0] != '\0') {
+        strncpy(out, s->buf, FAT32_MAX_NAME - 1);
+        out[FAT32_MAX_NAME - 1] = '\0';
+    } else {
+        name_from_83(de->name, out);
+        s->count = 0;
+    }
+}
 
 static void for_each_dirent(uint32_t dir_cluster, dirent_cb cb, void* ctx) {
     if (dir_cluster == 0) dir_cluster = g_fat32.root_cluster;
@@ -345,18 +534,18 @@ int fat32_format(uint32_t partition_lba, uint32_t total_sectors, uint8_t sectors
     return fat32_mount(partition_lba);
 }
 
-struct list_ctx { fat32_dirent_t* out; int max; int count; };
+struct list_ctx { fat32_dirent_t* out; int max; int count; lfn_state_t lfn; };
 
 static int list_cb(fat32_direntry_t* de, uint32_t lba, int slot, void* vctx) {
-    (void)lba; (void)slot;
     struct list_ctx* ctx = (struct list_ctx*)vctx;
     if (de->name[0] == 0x00) return 1;
-    if (de->name[0] == 0xE5) return 0;
-    if (de->attr == FAT32_ATTR_LFN) return 0;
-    if (de->attr & FAT32_ATTR_VOLID) return 0;
+    if (de->name[0] == 0xE5) { lfn_reset(&ctx->lfn); return 0; }
+    if (de->attr == FAT32_ATTR_LFN) { lfn_add(&ctx->lfn, (fat32_lfnentry_t*)de, lba, slot); return 0; }
+    if (de->attr & FAT32_ATTR_VOLID) { lfn_reset(&ctx->lfn); return 0; }
     if (ctx->count >= ctx->max) return 1;
     fat32_dirent_t* o = &ctx->out[ctx->count];
-    name_from_83(de->name, o->name);
+    lfn_take(&ctx->lfn, de, o->name);
+    lfn_reset(&ctx->lfn);
     o->attr = de->attr;
     o->first_cluster = ((uint32_t)de->first_cluster_hi << 16) | de->first_cluster_lo;
     o->size = de->file_size;
@@ -377,15 +566,19 @@ struct find_ctx {
     uint32_t found_lba;
     int found_slot;
     int ok;
+    uint32_t lfn_lbas[FAT32_MAX_LFN_ENTRIES];
+    int lfn_slots[FAT32_MAX_LFN_ENTRIES];
+    int lfn_count;
+    lfn_state_t lfn;
 };
 
 static int find_cb(fat32_direntry_t* de, uint32_t lba, int slot, void* vctx) {
     struct find_ctx* ctx = (struct find_ctx*)vctx;
     if (de->name[0] == 0x00) return 1;
-    if (de->name[0] == 0xE5) return 0;
-    if (de->attr == FAT32_ATTR_LFN) return 0;
+    if (de->name[0] == 0xE5) { lfn_reset(&ctx->lfn); return 0; }
+    if (de->attr == FAT32_ATTR_LFN) { lfn_add(&ctx->lfn, (fat32_lfnentry_t*)de, lba, slot); return 0; }
     char name[FAT32_MAX_NAME];
-    name_from_83(de->name, name);
+    lfn_take(&ctx->lfn, de, name);
 
     int i = 0;
     for (; name[i] && ctx->target[i]; i++) {
@@ -396,8 +589,14 @@ static int find_cb(fat32_direntry_t* de, uint32_t lba, int slot, void* vctx) {
         ctx->found_lba = lba;
         ctx->found_slot = slot;
         ctx->ok = 1;
+        ctx->lfn_count = ctx->lfn.count;
+        for (int k = 0; k < ctx->lfn.count; k++) {
+            ctx->lfn_lbas[k] = ctx->lfn.lbas[k];
+            ctx->lfn_slots[k] = ctx->lfn.slots[k];
+        }
         return 1;
     }
+    lfn_reset(&ctx->lfn);
     return 0;
 }
 
@@ -475,46 +674,136 @@ uint32_t fat32_read(const fat32_dirent_t* file, uint32_t offset, uint32_t size, 
     return bytes_read;
 }
 
-struct free_slot_ctx { uint32_t lba; int slot; int found; };
-static int free_slot_cb(fat32_direntry_t* de, uint32_t lba, int slot, void* vctx) {
-    struct free_slot_ctx* ctx = (struct free_slot_ctx*)vctx;
+struct slot_run_ctx {
+    uint32_t lbas[FAT32_MAX_LFN_ENTRIES + 1];
+    int      slots[FAT32_MAX_LFN_ENTRIES + 1];
+    int      need;
+    int      have;
+};
+
+static int slot_run_cb(fat32_direntry_t* de, uint32_t lba, int slot, void* vctx) {
+    struct slot_run_ctx* ctx = (struct slot_run_ctx*)vctx;
     if (de->name[0] == 0x00 || de->name[0] == 0xE5) {
-        ctx->lba = lba; ctx->slot = slot; ctx->found = 1;
-        return 1;
+        ctx->lbas[ctx->have] = lba;
+        ctx->slots[ctx->have] = slot;
+        ctx->have++;
+        if (ctx->have >= ctx->need) return 1;
+        return 0;
     }
+    ctx->have = 0;
     return 0;
 }
 
-static int alloc_dirent_slot(uint32_t dir_cluster, uint32_t* out_lba, int* out_slot) {
+static int alloc_dirent_slots(uint32_t dir_cluster, int need, uint32_t* lbas, int* slots) {
     if (dir_cluster == 0) dir_cluster = g_fat32.root_cluster;
-    struct free_slot_ctx ctx = {0};
-    for_each_dirent(dir_cluster, free_slot_cb, &ctx);
-    if (ctx.found) { *out_lba = ctx.lba; *out_slot = ctx.slot; return 0; }
-
+    struct slot_run_ctx ctx = {0};
+    ctx.need = need;
+    for_each_dirent(dir_cluster, slot_run_cb, &ctx);
+    if (ctx.have >= need) {
+        for (int i = 0; i < need; i++) { lbas[i] = ctx.lbas[i]; slots[i] = ctx.slots[i]; }
+        return 0;
+    }
 
     uint32_t cluster = dir_cluster;
     while (!fat_is_eoc(fat_entry_get(cluster))) cluster = fat_entry_get(cluster);
     uint32_t nc = alloc_cluster();
     if (nc == 0) return -1;
     fat_entry_set(cluster, nc);
-    *out_lba = cluster_to_lba(nc);
-    *out_slot = 0;
+
+    int filled = ctx.have;
+    for (int i = 0; i < filled; i++) { lbas[i] = ctx.lbas[i]; slots[i] = ctx.slots[i]; }
+    uint32_t base_lba = cluster_to_lba(nc);
+    for (uint8_t s = 0; s < g_fat32.sectors_per_cluster && filled < need; s++) {
+        for (int i = 0; i < (int)DIRENTS_PER_SECTOR && filled < need; i++) {
+            lbas[filled] = base_lba + s;
+            slots[filled] = i;
+            filled++;
+        }
+    }
+    if (filled < need) return -1;
     return 0;
 }
 
-static void write_dirent(uint32_t lba, int slot, const char* name, uint8_t attr,
-                          uint32_t first_cluster, uint32_t size) {
+static void update_dirent_fields(uint32_t lba, int slot, uint8_t attr,
+                                  uint32_t first_cluster, uint32_t size) {
     uint8_t buf[FAT32_SECTOR_SIZE];
     block_read(lba, buf);
-    fat32_direntry_t* ents = (fat32_direntry_t*)buf;
-    fat32_direntry_t* de = &ents[slot];
-    memset(de, 0, sizeof(*de));
-    name_to_83(name, de->name);
+    fat32_direntry_t* de = &((fat32_direntry_t*)buf)[slot];
     de->attr = attr;
     de->first_cluster_hi = (uint16_t)(first_cluster >> 16);
     de->first_cluster_lo = (uint16_t)(first_cluster & 0xFFFF);
     de->file_size = size;
     block_write(lba, buf);
+}
+
+static int create_new_dirent(uint32_t dir_cluster, const char* name, uint8_t attr,
+                              uint32_t first_cluster, uint32_t size,
+                              uint32_t* out_lba, int* out_slot) {
+    uint8_t short11[11];
+    int need_lfn = name_needs_lfn(name);
+    if (need_lfn) gen_short_name(dir_cluster, name, short11);
+    else name_to_83(name, short11);
+
+    int namelen = (int)strlen(name);
+    int lfn_count = need_lfn ? (namelen + 12) / 13 : 0;
+    if (lfn_count > FAT32_MAX_LFN_ENTRIES) lfn_count = FAT32_MAX_LFN_ENTRIES;
+
+    uint32_t lbas[FAT32_MAX_LFN_ENTRIES + 1];
+    int slots[FAT32_MAX_LFN_ENTRIES + 1];
+    if (alloc_dirent_slots(dir_cluster, lfn_count + 1, lbas, slots) != 0) return -1;
+
+    uint8_t chk = lfn_checksum(short11);
+    for (int e = 0; e < lfn_count; e++) {
+        int order = lfn_count - e;
+        int pos = (order - 1) * 13;
+        uint16_t units[13];
+        for (int i = 0; i < 13; i++) {
+            int ci = pos + i;
+            if (ci < namelen) units[i] = (uint16_t)(uint8_t)name[ci];
+            else if (ci == namelen) units[i] = 0x0000;
+            else units[i] = 0xFFFF;
+        }
+        uint8_t buf[FAT32_SECTOR_SIZE];
+        block_read(lbas[e], buf);
+        fat32_lfnentry_t* le = &((fat32_lfnentry_t*)buf)[slots[e]];
+        memset(le, 0, sizeof(*le));
+        le->order = (uint8_t)(order | (e == 0 ? 0x40 : 0));
+        memcpy(le->name1, &units[0], 10);
+        le->attr = FAT32_ATTR_LFN;
+        le->type = 0;
+        le->checksum = chk;
+        memcpy(le->name2, &units[5], 12);
+        le->first_cluster_lo = 0;
+        memcpy(le->name3, &units[11], 4);
+        block_write(lbas[e], buf);
+    }
+
+    uint32_t se_lba = lbas[lfn_count];
+    int se_slot = slots[lfn_count];
+    uint8_t buf[FAT32_SECTOR_SIZE];
+    block_read(se_lba, buf);
+    fat32_direntry_t* de = &((fat32_direntry_t*)buf)[se_slot];
+    memset(de, 0, sizeof(*de));
+    memcpy(de->name, short11, 11);
+    de->attr = attr;
+    de->first_cluster_hi = (uint16_t)(first_cluster >> 16);
+    de->first_cluster_lo = (uint16_t)(first_cluster & 0xFFFF);
+    de->file_size = size;
+    block_write(se_lba, buf);
+
+    *out_lba = se_lba;
+    *out_slot = se_slot;
+    return 0;
+}
+
+static void erase_lfn_run(struct find_ctx* fc) {
+    for (int k = 0; k < fc->lfn_count; k++) {
+        uint8_t buf[FAT32_SECTOR_SIZE];
+        block_read(fc->lfn_lbas[k], buf);
+        fat32_direntry_t* de = &((fat32_direntry_t*)buf)[fc->lfn_slots[k]];
+        de->name[0] = 0xE5;
+        block_write(fc->lfn_lbas[k], buf);
+    }
 }
 
 int fat32_write_file(uint32_t dir_cluster, const char* name, const uint8_t* data, uint32_t len) {
@@ -523,14 +812,12 @@ int fat32_write_file(uint32_t dir_cluster, const char* name, const uint8_t* data
     uint32_t first_cluster;
     uint32_t entry_lba; int entry_slot;
 
-    if (find_in_dir(dir_cluster, name, &fc) == 0) {
-
+    int existing = (find_in_dir(dir_cluster, name, &fc) == 0);
+    if (existing) {
         uint32_t old = ((uint32_t)fc.found.first_cluster_hi << 16) | fc.found.first_cluster_lo;
         if (old >= 2) free_chain(old);
         entry_lba = fc.found_lba;
         entry_slot = fc.found_slot;
-    } else {
-        if (alloc_dirent_slot(dir_cluster, &entry_lba, &entry_slot) != 0) return -1;
     }
 
     first_cluster = 0;
@@ -562,8 +849,36 @@ int fat32_write_file(uint32_t dir_cluster, const char* name, const uint8_t* data
         }
     }
 
-    write_dirent(entry_lba, entry_slot, name, FAT32_ATTR_ARCHIVE, first_cluster, len);
+    if (existing) {
+        update_dirent_fields(entry_lba, entry_slot, FAT32_ATTR_ARCHIVE, first_cluster, len);
+    } else {
+        if (create_new_dirent(dir_cluster, name, FAT32_ATTR_ARCHIVE, first_cluster, len,
+                               &entry_lba, &entry_slot) != 0) {
+            if (first_cluster >= 2) free_chain(first_cluster);
+            return -1;
+        }
+    }
     return 0;
+}
+
+static int alloc_dirent_slot(uint32_t dir_cluster, uint32_t* out_lba, int* out_slot) {
+    return alloc_dirent_slots(dir_cluster, 1, out_lba, out_slot);
+}
+
+static void write_dirent(uint32_t lba, int slot, const char* name, uint8_t attr, uint32_t first_cluster, uint32_t size) {
+    uint8_t buf[FAT32_SECTOR_SIZE];
+    block_read(lba, buf);
+    fat32_direntry_t* de = &((fat32_direntry_t*)buf)[slot];
+    if (name) {
+        uint8_t short11[11];
+        name_to_83(name, short11);
+        memcpy(de->name, short11, 11);
+    }
+    de->attr = attr;
+    de->first_cluster_hi = (uint16_t)(first_cluster >> 16);
+    de->first_cluster_lo = (uint16_t)(first_cluster & 0xFFFF);
+    de->file_size = size;
+    block_write(lba, buf);
 }
 
 int fat32_append_file(uint32_t dir_cluster, const char* name, const uint8_t* data, uint32_t len) {
@@ -579,7 +894,7 @@ int fat32_append_file(uint32_t dir_cluster, const char* name, const uint8_t* dat
     if (cluster < 2) {
         cluster = alloc_cluster();
         if (cluster == 0) return -1;
-        write_dirent(fc.found_lba, fc.found_slot, name, fc.found.attr, cluster, old_size);
+        update_dirent_fields(fc.found_lba, fc.found_slot, fc.found.attr, cluster, old_size);
     } else {
         while (!fat_is_eoc(fat_entry_get(cluster))) cluster = fat_entry_get(cluster);
     }
@@ -661,6 +976,41 @@ int fat32_delete_file(uint32_t dir_cluster, const char* name) {
     uint32_t cluster = ((uint32_t)fc.found.first_cluster_hi << 16) | fc.found.first_cluster_lo;
     if (cluster >= 2) free_chain(cluster);
 
+    uint8_t buf[FAT32_SECTOR_SIZE];
+    block_read(fc.found_lba, buf);
+    fat32_direntry_t* ents = (fat32_direntry_t*)buf;
+    ents[fc.found_slot].name[0] = 0xE5;
+    block_write(fc.found_lba, buf);
+    return 0;
+}
+
+struct dir_empty_ctx {
+    int nonempty;
+};
+
+static int dir_empty_cb(fat32_direntry_t* de, uint32_t lba, int slot, void* vctx) {
+    (void)lba;
+    (void)slot;
+    struct dir_empty_ctx* ctx = (struct dir_empty_ctx*)vctx;
+    if (de->name[0] == 0) return 1;
+    if (de->name[0] == 0xE5 || de->attr == FAT32_ATTR_LFN || (de->attr & FAT32_ATTR_VOLID)) return 0;
+    if (de->name[0] == '.' && (de->name[1] == ' ' || de->name[1] == '.')) return 0;
+    ctx->nonempty = 1;
+    return 1;
+}
+
+int fat32_remove_dir(uint32_t dir_cluster, const char* name) {
+    if (!g_fat32.mounted) return -1;
+    struct find_ctx fc;
+    if (find_in_dir(dir_cluster, name, &fc) != 0 || !(fc.found.attr & FAT32_ATTR_DIR)) return -1;
+
+    uint32_t cluster = ((uint32_t)fc.found.first_cluster_hi << 16) | fc.found.first_cluster_lo;
+    if (cluster < 2 || cluster == g_fat32.root_cluster) return -1;
+    struct dir_empty_ctx ctx = {0};
+    for_each_dirent(cluster, dir_empty_cb, &ctx);
+    if (ctx.nonempty) return -2;
+
+    free_chain(cluster);
     uint8_t buf[FAT32_SECTOR_SIZE];
     block_read(fc.found_lba, buf);
     fat32_direntry_t* ents = (fat32_direntry_t*)buf;

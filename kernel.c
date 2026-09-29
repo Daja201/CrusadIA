@@ -1,6 +1,7 @@
 #include "klog.h"
 #include "terminal.h"
 #include "fs.h"
+#include "vfs.h"
 #include "rtc.h"
 #include "string.h"
 #include "vesa.h"
@@ -77,7 +78,7 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     klog_status("PAGING OK", 0x00FF00);
     klog_status("VESA OK", 0x00FF00);
     drives();
-    init_fs();
+    vfs_init();
     klog_status("FILESYSTEM OK", 0x00FF00);
     timer_init(1000); 
     init_multitasking();

@@ -3,7 +3,7 @@
 #include "string.h"
 #include "terminal.h"
 #include "vesa.h"
-#include "fs.h"
+#include "vfs.h"
 
 #define SCRIBER_BUF_SIZE 16384
 #define SCRIBER_FNAME_SIZE 32
@@ -197,10 +197,7 @@ static void scriber_save(void) {
         return;
     }
     scriber_fname[scriber_fname_len] = 0;
-    uint32_t inode = fs_create_file(scriber_fname, "scb");
-    if ((int32_t)inode >= 0) {
-        fs_write(inode, 0, (const uint8_t*)scriber_buf, scriber_len);
-    }
+    vfs_write_file(scriber_fname, scriber_buf, (uint32_t)scriber_len, "scb", 0);
     scriber_exit();
 }
 

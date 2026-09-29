@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "pmm.h"
 #include "gdt.h"
+#include "vfs.h"
 
 #define TASK_STACK_SIZE 16384
 #define TASK_KSTACK_SIZE 8192
@@ -27,6 +28,7 @@ static int find_dead_slot(void) {
 }
 
 void task_exit() {
+    vfs_task_killed(current_task);
     tasks[current_task].state = TASK_DEAD;
     for (;;) {
         asm volatile("sti; hlt");
