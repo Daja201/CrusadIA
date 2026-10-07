@@ -25,8 +25,12 @@ void pmm_init_region(uint32_t base_addr, uint32_t size) {
     uint32_t align = base_addr / PMM_BLOCK_SIZE;
     uint32_t blocks = size / PMM_BLOCK_SIZE;
     for (uint32_t i = 0; i < blocks; i++) {
-        bitmap_clear(align + i);
-        pmm_used_blocks--;
+        uint32_t bit = align + i;
+        if (bit >= PMM_MAX_BLOCKS) break;
+        if (bitmap_test(bit)) {
+            bitmap_clear(bit);
+            pmm_used_blocks--;
+        }
     }
     bitmap_set(0); 
 }
@@ -36,8 +40,12 @@ void pmm_deinit_region(uint32_t base_addr, uint32_t size) {
     uint32_t blocks = size / PMM_BLOCK_SIZE;
 
     for (uint32_t i = 0; i < blocks; i++) {
-        bitmap_set(align + i);
-        pmm_used_blocks++;
+        uint32_t bit = align + i;
+        if (bit >= PMM_MAX_BLOCKS) break;
+        if (!bitmap_test(bit)) {
+            bitmap_set(bit);
+            pmm_used_blocks++;
+        }
     }
 }
 
@@ -64,6 +72,8 @@ void* pmm_alloc_block() {
 
 void pmm_free_block(void* addr) {
     uint32_t block = (uint32_t)addr / PMM_BLOCK_SIZE;
+    if (block >= PMM_MAX_BLOCKS) return;
+    if (!bitmap_test(block)) return;
     bitmap_clear(block);
-    pmm_used_blocks--;
+    if (pmm_used_blocks > 0) pmm_used_blocks--;
 }

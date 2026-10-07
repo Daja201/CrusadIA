@@ -5,6 +5,7 @@
 #define HEAP_MAGIC 0x5A4C534A
 #define ALIGN 8
 #define ALIGN_UP(x) (((x) + (ALIGN - 1)) & ~(size_t)(ALIGN - 1))
+#define SIZE_MAX_LOCAL ((size_t)-1)
 
 typedef struct block_header {
     uint32_t magic;
@@ -25,7 +26,9 @@ void heap_init(void) {
 }
 
 static block_header_t* grow_heap(size_t min_size) {
+    if (min_size > SIZE_MAX_LOCAL - HEADER_SIZE) return 0;
     size_t needed = HEADER_SIZE + min_size;
+    if (needed > SIZE_MAX_LOCAL - (PMM_BLOCK_SIZE - 1)) return 0;
     size_t pages_needed = (needed + PMM_BLOCK_SIZE - 1) / PMM_BLOCK_SIZE;
 
     void* first = pmm_alloc_block();
@@ -65,7 +68,8 @@ static block_header_t* grow_heap(size_t min_size) {
 }
 
 static void split_block(block_header_t* block, size_t size) {
-    if (block->size < size + HEADER_SIZE + ALIGN) return;
+    if (size > block->size) return;
+    if (block->size - size < HEADER_SIZE + ALIGN) return;
 
     block_header_t* new_block = (block_header_t*)((uint8_t*)block + HEADER_SIZE + size);
     new_block->magic = HEAP_MAGIC;
@@ -103,6 +107,7 @@ static void coalesce(block_header_t* block) {
 
 void* malloc(size_t size) {
     if (size == 0) return 0;
+    if (size > SIZE_MAX_LOCAL - (ALIGN - 1)) return 0;
     size = ALIGN_UP(size);
 
     block_header_t* cur = heap_head;
@@ -126,6 +131,7 @@ void* malloc(size_t size) {
 
 void free(void* ptr) {
     if (!ptr) return;
+    if (((uintptr_t)ptr % ALIGN) != 0) return;
     block_header_t* block = (block_header_t*)((uint8_t*)ptr - HEADER_SIZE);
     if (block->magic != HEAP_MAGIC) return;
     if (block->free) return;
@@ -134,6 +140,8 @@ void free(void* ptr) {
 }
 
 void* calloc(size_t nmemb, size_t size) {
+    if (nmemb == 0 || size == 0) return 0;
+    if (nmemb > SIZE_MAX_LOCAL / size) return 0;
     size_t total = nmemb * size;
     void* ptr = malloc(total);
     if (ptr) memset(ptr, 0, total);
@@ -146,9 +154,12 @@ void* realloc(void* ptr, size_t size) {
         free(ptr);
         return 0;
     }
+    if (((uintptr_t)ptr % ALIGN) != 0) return 0;
 
     block_header_t* block = (block_header_t*)((uint8_t*)ptr - HEADER_SIZE);
     if (block->magic != HEAP_MAGIC) return 0;
+    if (block->free) return 0;
+    if (size > SIZE_MAX_LOCAL - (ALIGN - 1)) return 0;
 
     size_t aligned = ALIGN_UP(size);
     if (block->size >= aligned) {

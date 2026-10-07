@@ -3,16 +3,18 @@
 #include "pmm.h"
 #include "gdt.h"
 #include "vfs.h"
+#include "paging.h"
 
 #define TASK_STACK_SIZE 16384
 #define TASK_KSTACK_SIZE 8192
+#define TASK_GUARD_SIZE 4096
 #define MAX_TASKS 16
 extern volatile uint32_t system_ticks;
 task_t tasks[MAX_TASKS];
 int current_task = -1;
 int num_tasks = 0;
-static uint8_t task_stacks[MAX_TASKS][TASK_STACK_SIZE] __attribute__((aligned(16)));
-static uint8_t task_kstacks[MAX_TASKS][TASK_KSTACK_SIZE] __attribute__((aligned(16)));
+static uint8_t task_stacks[MAX_TASKS][TASK_GUARD_SIZE + TASK_STACK_SIZE] __attribute__((aligned(4096)));
+static uint8_t task_kstacks[MAX_TASKS][TASK_GUARD_SIZE + TASK_KSTACK_SIZE] __attribute__((aligned(4096)));
 
 static uint32_t next_pid = 0;
 
@@ -38,6 +40,7 @@ void task_exit() {
 void init_multitasking() {
     tasks[0].pid = 0;
     tasks[0].state = TASK_RUNNING;
+    tasks[0].page_directory = page_directory;
     num_tasks = 1;
     current_task = 0;
     next_pid = 1;
@@ -60,20 +63,32 @@ uint32_t schedule_handler(uint32_t esp) {
         return tasks[current_task].esp;
     }
 
-    for (;;) {
+    int start_task = current_task;
+    int found = 0;
+    for (int tries = 0; tries < num_tasks; tries++) {
         current_task++;
         if (current_task >= num_tasks) {
             current_task = 0;
         }
         if (tasks[current_task].state == TASK_READY ||
             tasks[current_task].state == TASK_RUNNING) {
+            found = 1;
             break;
+        }
+    }
+    if (!found) {
+        if (tasks[0].state != TASK_DEAD) {
+            current_task = 0;
+            tasks[0].state = TASK_RUNNING;
+        } else {
+            current_task = (start_task >= 0 && start_task < num_tasks) ? start_task : 0;
         }
     }
     uint32_t p = tasks[current_task].priority;
     ticks_left_on_current = (p > 0) ? (p - 1) : 0;
 
     tss_set_kernel_stack(tasks[current_task].kernel_stack_top);
+    switch_page_directory(tasks[current_task].page_directory);
 
     return tasks[current_task].esp;
 }
@@ -85,7 +100,7 @@ void create_task(void (*entry_point)(), uint32_t priority) {
         slot = num_tasks;
         num_tasks++;
     }
-    uint32_t *stack = (uint32_t *)(task_stacks[slot] + TASK_STACK_SIZE);
+    uint32_t *stack = (uint32_t *)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
     *(--stack) = (uint32_t)task_exit;
     *(--stack) = 0x0202;                
     *(--stack) = 0x10;          
@@ -101,7 +116,12 @@ void create_task(void (*entry_point)(), uint32_t priority) {
     tasks[slot].state = TASK_READY;
     tasks[slot].priority = priority;
     tasks[slot].is_user = 0;
-    tasks[slot].kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_KSTACK_SIZE);
+    tasks[slot].kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_GUARD_SIZE + TASK_KSTACK_SIZE);
+
+    uint32_t* dir = clone_kernel_page_directory();
+    unmap_page_dir(dir, (uint32_t)task_stacks[slot]);
+    unmap_page_dir(dir, (uint32_t)task_kstacks[slot]);
+    tasks[slot].page_directory = dir;
 }
 
 void create_user_task(void (*entry_point)(), uint32_t priority) {
@@ -112,8 +132,8 @@ void create_user_task(void (*entry_point)(), uint32_t priority) {
         num_tasks++;
     }
 
-    uint32_t user_stack_top = (uint32_t)(task_stacks[slot] + TASK_STACK_SIZE);
-    uint32_t kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_KSTACK_SIZE);
+    uint32_t user_stack_top = (uint32_t)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
+    uint32_t kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_GUARD_SIZE + TASK_KSTACK_SIZE);
     uint32_t *kstack = (uint32_t *)kernel_stack_top;
 
     *(--kstack) = GDT_USER_DATA_SEL;
@@ -132,4 +152,9 @@ void create_user_task(void (*entry_point)(), uint32_t priority) {
     tasks[slot].priority = priority;
     tasks[slot].is_user = 1;
     tasks[slot].kernel_stack_top = kernel_stack_top;
+
+    uint32_t* dir = clone_kernel_page_directory();
+    unmap_page_dir(dir, (uint32_t)task_stacks[slot]);
+    unmap_page_dir(dir, (uint32_t)task_kstacks[slot]);
+    tasks[slot].page_directory = dir;
 }
