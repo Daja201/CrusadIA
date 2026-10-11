@@ -37,7 +37,8 @@ void rtc_get_datetime(
 
 {
     uint8_t statusB;
-    while (rtc_updating());
+    uint32_t timeout = 100000;
+    while (rtc_updating() && --timeout);
     *sec   = rtc_read(0x00);
     *min   = rtc_read(0x02);
     *hour  = rtc_read(0x04) + timezone;

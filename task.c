@@ -29,8 +29,37 @@ static int find_dead_slot(void) {
     return -1;
 }
 
+static void free_task_address_space(task_t *t) {
+    if (!t->page_directory || t->page_directory == page_directory) return;
+    switch_page_directory(page_directory);
+    uint32_t *dir = t->page_directory;
+    for (int i = 0; i < 1024; i++) {
+        uint32_t entry = dir[i];
+        if (!(entry & 0x1)) continue;
+        uint32_t global_entry = page_directory[i];
+        if ((global_entry & 0x1) && (entry & ~0xFFFu) == (global_entry & ~0xFFFu)) continue;
+        pmm_free_block((void*)(entry & ~0xFFFu));
+    }
+    pmm_free_block((void*)((uint32_t)dir & ~0xFFFu));
+    for (int i = 0; i < t->owned_frame_count; i++) {
+        pmm_free_block((void*)t->owned_frames[i]);
+    }
+    t->owned_frame_count = 0;
+    t->page_directory = 0;
+}
+
+int task_track_frames(int slot, const uint32_t* frames, int count) {
+    if (slot < 0 || slot >= num_tasks) return -1;
+    if (tasks[slot].owned_frame_count + count > TASK_MAX_OWNED_FRAMES) return -1;
+    for (int i = 0; i < count; i++) {
+        tasks[slot].owned_frames[tasks[slot].owned_frame_count++] = frames[i];
+    }
+    return 0;
+}
+
 void task_exit() {
     vfs_task_killed(current_task);
+    free_task_address_space(&tasks[current_task]);
     tasks[current_task].state = TASK_DEAD;
     for (;;) {
         asm volatile("sti; hlt");
@@ -93,13 +122,14 @@ uint32_t schedule_handler(uint32_t esp) {
     return tasks[current_task].esp;
 }
 
-void create_task(void (*entry_point)(), uint32_t priority) {
+int create_task(void (*entry_point)(), uint32_t priority) {
     int slot = find_dead_slot();
     if (slot < 0) {
-        if (num_tasks >= MAX_TASKS) return;
+        if (num_tasks >= MAX_TASKS) return -1;
         slot = num_tasks;
         num_tasks++;
     }
+    tasks[slot].owned_frame_count = 0;
     uint32_t *stack = (uint32_t *)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
     *(--stack) = 0x0202;                /* eflags */
     *(--stack) = 0x10;                  /* cs (ring0) */
@@ -117,18 +147,24 @@ void create_task(void (*entry_point)(), uint32_t priority) {
     tasks[slot].kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_GUARD_SIZE + TASK_KSTACK_SIZE);
 
     uint32_t* dir = clone_kernel_page_directory();
+    if (!dir) {
+        tasks[slot].state = TASK_DEAD;
+        return -1;
+    }
     unmap_page_dir(dir, (uint32_t)task_stacks[slot]);
     unmap_page_dir(dir, (uint32_t)task_kstacks[slot]);
     tasks[slot].page_directory = dir;
+    return slot;
 }
 
-void create_user_task(void (*entry_point)(), uint32_t priority) {
+int create_user_task(void (*entry_point)(), uint32_t priority) {
     int slot = find_dead_slot();
     if (slot < 0) {
-        if (num_tasks >= MAX_TASKS) return;
+        if (num_tasks >= MAX_TASKS) return -1;
         slot = num_tasks;
         num_tasks++;
     }
+    tasks[slot].owned_frame_count = 0;
 
     uint32_t user_stack_top = (uint32_t)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
     uint32_t kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_GUARD_SIZE + TASK_KSTACK_SIZE);
@@ -152,7 +188,12 @@ void create_user_task(void (*entry_point)(), uint32_t priority) {
     tasks[slot].kernel_stack_top = kernel_stack_top;
 
     uint32_t* dir = clone_kernel_page_directory();
+    if (!dir) {
+        tasks[slot].state = TASK_DEAD;
+        return -1;
+    }
     unmap_page_dir(dir, (uint32_t)task_stacks[slot]);
     unmap_page_dir(dir, (uint32_t)task_kstacks[slot]);
     tasks[slot].page_directory = dir;
+    return slot;
 }

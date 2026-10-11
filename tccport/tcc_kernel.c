@@ -386,8 +386,6 @@ int tcc_os_compile_obj_source(const char *name, const char *source, const char *
     return (rc == 0 && r.ok) ? 0 : -1;
 }
 
-/* ----------------------------------------------------------- shell hook */
-
 void cmd_cc(int argc, char **argv) {
     int code = 0;
     if (argc < 2) {

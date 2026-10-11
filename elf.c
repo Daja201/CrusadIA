@@ -61,7 +61,23 @@ const char* elf_strerror(int err) {
     }
 }
 
-static int load_segment(int fd, uint32_t fsize, const elf32_phdr_t* ph) {
+typedef struct {
+    uint32_t frames[TASK_MAX_OWNED_FRAMES];
+    int count;
+} elf_frames_t;
+
+static int track_frame(elf_frames_t* fr, uint32_t phys) {
+    if (fr->count >= TASK_MAX_OWNED_FRAMES) return -1;
+    fr->frames[fr->count++] = phys;
+    return 0;
+}
+
+static void free_frames(elf_frames_t* fr) {
+    for (int i = 0; i < fr->count; i++) pmm_free_block((void*)fr->frames[i]);
+    fr->count = 0;
+}
+
+static int load_segment(int fd, uint32_t fsize, const elf32_phdr_t* ph, elf_frames_t* fr) {
     if (ph->p_filesz > ph->p_memsz) return ELF_E_SEGMENT;
     if (ph->p_offset > fsize) return ELF_E_SEGMENT;
     if (ph->p_filesz > fsize - ph->p_offset) return ELF_E_SEGMENT;
@@ -76,6 +92,10 @@ static int load_segment(int fd, uint32_t fsize, const elf32_phdr_t* ph) {
     for (uint32_t va = start; va < end; va += PAGE_SIZE) {
         void* phys = pmm_alloc_block();
         if (!phys) return ELF_E_MEM;
+        if (track_frame(fr, (uint32_t)phys) != 0) {
+            pmm_free_block(phys);
+            return ELF_E_MEM;
+        }
 
         map_page((uint32_t)phys, va, 0x07);
         memset((void*)va, 0, PAGE_SIZE);
@@ -125,21 +145,27 @@ int elf_exec(const char* path, uint32_t priority) {
         return ELF_E_READ;
     }
 
+    elf_frames_t fr;
+    fr.count = 0;
+
     for (uint16_t i = 0; i < eh.e_phnum; i++) {
         elf32_phdr_t ph;
         uint32_t off = eh.e_phoff + (uint32_t)i * eh.e_phentsize;
         if (off > (uint32_t)fsize || sizeof(ph) > (uint32_t)fsize - off) {
+            free_frames(&fr);
             vfs_close(fd);
             return ELF_E_PHDR;
         }
         if (vfs_pread(fd, off, &ph, sizeof(ph)) != (long)sizeof(ph)) {
+            free_frames(&fr);
             vfs_close(fd);
             return ELF_E_PHDR;
         }
         if (ph.p_type != PT_LOAD) continue;
 
-        int r = load_segment(fd, (uint32_t)fsize, &ph);
+        int r = load_segment(fd, (uint32_t)fsize, &ph, &fr);
         if (r != ELF_OK) {
+            free_frames(&fr);
             vfs_close(fd);
             return r;
         }
@@ -148,6 +174,11 @@ int elf_exec(const char* path, uint32_t priority) {
     uint32_t entry = eh.e_entry;
     vfs_close(fd);
 
-    create_user_task((void (*)())entry, priority);
+    int slot = create_user_task((void (*)())entry, priority);
+    if (slot < 0) {
+        free_frames(&fr);
+        return ELF_E_MEM;
+    }
+    task_track_frames(slot, fr.frames, fr.count);
     return ELF_OK;
 }

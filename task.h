@@ -1,6 +1,7 @@
 #ifndef TASK_H
 #define TASK_H
 #include <stdint.h>
+#define TASK_MAX_OWNED_FRAMES 256
 typedef enum {
     TASK_READY,    
     TASK_RUNNING,  
@@ -17,9 +18,13 @@ typedef struct {
     uint32_t priority;
     uint32_t kernel_stack_top;
     int is_user;
+    uint32_t owned_frames[TASK_MAX_OWNED_FRAMES];
+    int owned_frame_count;
 } task_t;
-void create_task(void (*entry_point)(), uint32_t priority);
-void create_user_task(void (*entry_point)(), uint32_t priority);
+extern task_t tasks[];
+int create_task(void (*entry_point)(), uint32_t priority);
+int create_user_task(void (*entry_point)(), uint32_t priority);
+int task_track_frames(int slot, const uint32_t* frames, int count);
 void task_exit(void);
 uint32_t schedule_handler(uint32_t esp);
 void init_multitasking();

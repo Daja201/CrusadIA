@@ -6,6 +6,7 @@
 #include "vesa.h"
 #include "task.h"
 #include "vfs.h"
+#include "paging.h"
 
 extern uint32_t boot_fb_addr; 
 extern uint32_t boot_fb_width;
@@ -115,8 +116,43 @@ void fault_handler(registers_t *regs) {
     }
     if (regs->int_no < 32) {
         if ((regs->cs & 3) == 3 && current_task >= 0) {
-            klogf_color("TASK %d KILLED: exception %d at eip 0x%x err 0x%x\n", 0xFF0000,
-                        tasks[current_task].pid, regs->int_no, regs->eip, regs->err_code);
+            uint32_t cr2;
+            asm volatile("mov %%cr2, %0" : "=r"(cr2));
+            c_x = 0;
+            c_y = 0;
+            klogf_color("TASK %d KILLED: exception %d at eip 0x%x err 0x%x cr2 0x%x esp 0x%x\n", 0xFF0000,
+                        tasks[current_task].pid, regs->int_no, regs->eip, regs->err_code, cr2, regs->useresp);
+
+            if (regs->int_no == 14) {
+                uint32_t pd_index = cr2 >> 22;
+                uint32_t pt_index = (cr2 >> 12) & 0x03FF;
+
+                uint32_t *live_dir = tasks[current_task].page_directory;
+                uint32_t live_pde = live_dir ? live_dir[pd_index] : 0;
+                uint32_t global_pde = page_directory[pd_index];
+
+                uint32_t live_pte = 0;
+                if (live_pde & 0x1) {
+                    uint32_t *live_table = (uint32_t*)(live_pde & ~0xFFFu);
+                    live_pte = live_table[pt_index];
+                }
+                uint32_t global_pte = 0;
+                if (global_pde & 0x1) {
+                    uint32_t *global_table = (uint32_t*)(global_pde & ~0xFFFu);
+                    global_pte = global_table[pt_index];
+                }
+
+                klogf_color("PF DEBUG: pd_index 0x%x pt_index 0x%x\n", 0xFFFF00, pd_index, pt_index);
+                klogf_color("PF DEBUG: task.pd[pd_index]=0x%x task.pt[pt_index]=0x%x\n", 0xFFFF00,
+                            live_pde, live_pte);
+                klogf_color("PF DEBUG: global.pd[pd_index]=0x%x global.pt[pt_index]=0x%x\n", 0xFFFF00,
+                            global_pde, global_pte);
+                klogf_color("PF DEBUG: task.page_directory=0x%x global page_directory=0x%x\n", 0xFFFF00,
+                            (uint32_t)live_dir, (uint32_t)page_directory);
+            }
+
+            extern void vesa_swap(void);
+            vesa_swap();
             vfs_task_killed(current_task);
             tasks[current_task].state = TASK_DEAD;
             for (;;) {

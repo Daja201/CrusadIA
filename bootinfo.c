@@ -1,6 +1,8 @@
 #include "bootinfo.h"
 #include <stdint.h>
 #include "pmm.h"
+
+extern uint32_t kernel_end;
 int boot_has_fb = 0;
 uint32_t boot_fb_addr = 0;
 uint32_t boot_fb_width = 0;
@@ -48,6 +50,9 @@ void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
         }
         pmm_deinit_region(0x0, 0x100000);
         pmm_deinit_region(0x100000, 0x500000);
+
+        uint32_t kernel_image_end = (uint32_t)&kernel_end;
+        pmm_deinit_region(0x100000, kernel_image_end - 0x100000);
     } else {
         klog("WARNING: No memory map provided by GRUB!\n");
     }

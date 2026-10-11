@@ -7,6 +7,34 @@ static inline uint32_t r3_syscall(uint32_t num, uint32_t a1, uint32_t a2, uint32
     return ret;
 }
 
+int r3_open(const char* path, int flags) {
+    return (int)r3_syscall(SYS_COSFS_OPEN, (uint32_t)path, (uint32_t)flags, 0);
+}
+
+int r3_close(int fd) {
+    return (int)r3_syscall(SYS_COSFS_CLOSE, (uint32_t)fd, 0, 0);
+}
+
+long r3_read(int fd, void* buf, uint32_t count) {
+    return (long)r3_syscall(SYS_COSFS_READ, (uint32_t)fd, (uint32_t)buf, count);
+}
+
+long r3_write(int fd, const void* buf, uint32_t count) {
+    return (long)r3_syscall(SYS_COSFS_WRITE, (uint32_t)fd, (uint32_t)buf, count);
+}
+
+long r3_lseek(int fd, long offset, int whence) {
+    return (long)r3_syscall(SYS_COSFS_LSEEK, (uint32_t)fd, (uint32_t)offset, (uint32_t)whence);
+}
+
+int r3_unlink(const char* path) {
+    return (int)r3_syscall(SYS_COSFS_UNLINK, (uint32_t)path, 0, 0);
+}
+
+int r3_mkdir(const char* path) {
+    return (int)r3_syscall(SYS_COSFS_MKDIR, (uint32_t)path, 0, 0);
+}
+
 int r3_cosfs_open(const char* path, int flags) {
     return (int)r3_syscall(SYS_COSFS_OPEN, (uint32_t)path, (uint32_t)flags, 0);
 }

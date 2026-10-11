@@ -3,6 +3,14 @@
 #include <stdint.h>
 #include <stddef.h>
 
+int r3_open(const char* path, int flags);
+int r3_close(int fd);
+long r3_read(int fd, void* buf, uint32_t count);
+long r3_write(int fd, const void* buf, uint32_t count);
+long r3_lseek(int fd, long offset, int whence);
+int r3_unlink(const char* path);
+int r3_mkdir(const char* path);
+
 int r3_cosfs_open(const char* path, int flags);
 int r3_cosfs_close(int fd);
 long r3_cosfs_read(int fd, void* buf, uint32_t count);

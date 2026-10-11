@@ -24,6 +24,8 @@
 #include "serial.h"
 #include "tccport/tcc_kernel.h"
 #include "elf.h"
+#include "ring3fs.h"
+#include "unistd.h"
 
 #define CHUNK_SIZE 65532
 void cmd_cd(int argc, char** argv);
@@ -302,16 +304,17 @@ static void list_directory(const char* path) {
 }
 
 static void read_file(const char* path) {
-    int fd = vfs_open(path, O_RDONLY);
+    int fd = r3_open(path, O_RDONLY);
     if (fd < 0) {
         kklogf("read: %s", vfs_strerror(fd));
         return;
     }
     static uint8_t buf[32768];
-    long size = vfs_fsize(fd);
+    long size = r3_lseek(fd, 0, SEEK_END);
+    r3_lseek(fd, 0, SEEK_SET);
     uint32_t count = size > (long)sizeof(buf) ? sizeof(buf) : (size > 0 ? (uint32_t)size : 0);
-    long bytes = count ? vfs_read(fd, buf, count) : 0;
-    vfs_close(fd);
+    long bytes = count ? r3_read(fd, buf, count) : 0;
+    r3_close(fd);
     if (bytes <= 0) {
         kklog("Error: Could not read file (or file is empty)");
         return;
@@ -464,7 +467,14 @@ void cmd_wr(int argc, char** argv) {
         kklog("Usage: wr <filename> <data>");
         return;
     }
-    long r = vfs_write_file(argv[1], argv[2], strlen(argv[2]), "wr", 0);
+    int fd = r3_open(argv[1], O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) {
+        kklogf("write: %s", vfs_strerror(fd));
+        return;
+    }
+    long len = (long)strlen(argv[2]);
+    long r = len ? r3_write(fd, argv[2], (uint32_t)len) : 0;
+    r3_close(fd);
     if (r < 0) kklogf("write: %s", vfs_strerror((int)r));
     else kklog("write successful");
 }
@@ -474,14 +484,7 @@ void cmd_dl(int argc, char** argv) {
         kklog("Usage: dl <file>");
         return;
     }
-    vfs_stat_t st;
-    int r = vfs_stat(argv[1], &st);
-    if (r != 0 || st.is_dir) {
-        kklog("dl: file not found or path is a directory");
-        return;
-    }
-    r = vfs_remove(argv[1]);
-    if (r != 0) kklogf("dl: %s", vfs_strerror(r));
+    if (r3_unlink(argv[1]) != 0) kklog("dl: file not found or path is a directory");
     else kklog("file deleted");
 }
 
@@ -490,8 +493,8 @@ void cmd_mf(int argc, char** argv) {
         kklog("Usage: mf <name>");
         return;
     }
-    int r = vfs_mkdir(argv[1]);
-    if (r != 0) kklogf("mkdir: %s", vfs_strerror(r));
+    int r = r3_mkdir(argv[1]);
+    if (r != 0) kklog("mkdir: failed");
     else kklog("directory created");
 }
 
@@ -540,14 +543,15 @@ static int bmp_parse_header(uint8_t* hdr, uint32_t* data_off, int32_t* width, in
 }
 
 static void showimage_file(const char* path) {
-    int fd = vfs_open(path, O_RDONLY);
+    int fd = r3_open(path, O_RDONLY);
     if (fd < 0) {
         kklogf("showimage: %s", vfs_strerror(fd));
         return;
     }
     uint8_t hdr[54];
-    if (vfs_pread(fd, 0, hdr, sizeof(hdr)) < (long)sizeof(hdr)) {
-        vfs_close(fd);
+    r3_lseek(fd, 0, SEEK_SET);
+    if (r3_read(fd, hdr, sizeof(hdr)) < (long)sizeof(hdr)) {
+        r3_close(fd);
         klog_status("ERROR COULD NOT READ BMP HEADER", 0xFF0000);
         return;
     }
@@ -556,16 +560,16 @@ static void showimage_file(const char* path) {
     uint16_t bpp;
     int rc = bmp_parse_header(hdr, &data_off, &width, &height, &bpp, &comp);
     if (rc == -1) {
-        vfs_close(fd);
+        r3_close(fd);
         klog_status("NOT A VALID BMP FILE", 0xFF0000);
         return;
     } else if (rc == -2) {
-        vfs_close(fd);
+        r3_close(fd);
         klog_status("UNSUPPORTED BMP FORMAT", 0xFF0000);
         return;
     }
     if (width <= 0 || height == 0) {
-        vfs_close(fd);
+        r3_close(fd);
         klog_status("INVALID BMP DIMENSIONS", 0xFF0000);
         return;
     }
@@ -574,7 +578,7 @@ static void showimage_file(const char* path) {
     uint32_t row_size = ((uint32_t)width * 3 + 3) & ~3u;
     static uint8_t row[BMP_MAX_ROW_BYTES];
     if (row_size > sizeof(row)) {
-        vfs_close(fd);
+        r3_close(fd);
         klog_status("BMP TOO WIDE", 0xFF0000);
         return;
     }
@@ -583,7 +587,8 @@ static void showimage_file(const char* path) {
     for (uint32_t r = 0; r < abs_height; r++) {
         uint32_t file_row = top_down ? r : (abs_height - 1 - r);
         uint32_t offset = data_off + file_row * row_size;
-        if (vfs_pread(fd, offset, row, row_size) < (long)row_size) break;
+        r3_lseek(fd, offset, SEEK_SET);
+        if (r3_read(fd, row, row_size) < (long)row_size) break;
         for (int32_t x = 0; x < width; x++) {
             uint8_t b = row[x * 3];
             uint8_t g = row[x * 3 + 1];
@@ -593,7 +598,7 @@ static void showimage_file(const char* path) {
         }
     }
     vesa_swap();
-    vfs_close(fd);
+    r3_close(fd);
 }
 
 void cmd_showimage(int argc, char** argv) {
