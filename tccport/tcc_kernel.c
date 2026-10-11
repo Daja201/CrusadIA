@@ -27,6 +27,7 @@
 #include "task.h"
 #include "syscall.h"
 #include "ring3fs.h"
+#include "usbhid.h"
 
 extern volatile uint32_t system_ticks;   /* idt.c, 1000 Hz PIT tick */
 
@@ -78,7 +79,10 @@ static const struct { const char *name; const void *addr; } guest_syms[] = {
     /* --- console / screen (klog.h, vesa.h) --- */
     SYM(klog), SYM(kklog), SYM(klogf), SYM(klog_color),
     SYM(Wwidth), SYM(Hheight), SYM(vesa_putpixel), SYM(vesa_draw_rec),
+    SYM(vesa_draw_hor), SYM(vesa_draw_ver), SYM(vesa_draw_char),
     SYM(vesa_clear), SYM(vesa_swap),
+    SYM(vesa_draw_button), SYM(vesa_buttons_clear), SYM(vesa_buttons_poll),
+    SYM(mouse_x), SYM(mouse_y), SYM(mouse_buttons), SYM(mouse_poll_click),
     /* --- time --- */
     SYM(system_ticks), SYM(os_sleep_ms), SYM(rtc_get_datetime), SYM(time), SYM(localtime),
     /* --- stdio --- */
@@ -119,7 +123,10 @@ static const struct { const char *name; const void *addr; } guest_syms[] = {
 static const struct { const char *name; const void *addr; } guest_syms_ring3[] = {
     SYM(klog), SYM(kklog), SYM(klogf), SYM(klog_color),
     SYM(Wwidth), SYM(Hheight), SYM(vesa_putpixel), SYM(vesa_draw_rec),
+    SYM(vesa_draw_hor), SYM(vesa_draw_ver), SYM(vesa_draw_char),
     SYM(vesa_clear), SYM(vesa_swap),
+    SYM(vesa_draw_button), SYM(vesa_buttons_clear), SYM(vesa_buttons_poll),
+    SYM(mouse_x), SYM(mouse_y), SYM(mouse_buttons), SYM(mouse_poll_click),
     SYM(system_ticks), SYM_AS("os_sleep_ms", ring3_sleep_ms),
     SYM(printf), SYM(fprintf), SYM(sprintf), SYM(snprintf), SYM(vsnprintf), SYM(vfprintf),
     SYM(puts), SYM(putchar), SYM(fputs), SYM(fputc), SYM(fflush), SYM(fwrite),
@@ -449,4 +456,36 @@ void cmd_cc(int argc, char **argv) {
     }
     if (tcc_os_run_file(argv[1], argc - 1, argv + 1, &code) == 0)
         klogf("[cc] %s exited with code %d\n", argv[1], code);
+}
+
+static const char guidemo_src[] =
+"static void draw_text(const char* s, int x, int y, unsigned int fg, unsigned int bg) {\n"
+"    while (*s) { vesa_draw_char(*s, x, y, fg, bg); x += 8; s++; }\n"
+"}\n"
+"static int counter = 0;\n"
+"static void on_count(void) { counter++; }\n"
+"static void on_quit(void) { exit(0); }\n"
+"int main(int argc, char** argv) {\n"
+"    vesa_buttons_clear();\n"
+"    char buf[16];\n"
+"    for (;;) {\n"
+"        vesa_clear(0x202030);\n"
+"        draw_text(\"guidemo - click Count, click Quit to exit\", 40, 30, 0xFFFFFF, 0x202030);\n"
+"        draw_text(\"clicks: \", 40, 70, 0xC0C0C0, 0x202030);\n"
+"        itoa(counter, buf, 10);\n"
+"        draw_text(buf, 40 + 8 * 8, 70, 0xC0C0C0, 0x202030);\n"
+"        vesa_draw_button(40, 110, 140, 40, 0x3050A0, \"Count\", on_count);\n"
+"        vesa_draw_button(200, 110, 140, 40, 0xA03030, \"Quit\", on_quit);\n"
+"        vesa_swap();\n"
+"        vesa_buttons_poll();\n"
+"        os_sleep_ms(16);\n"
+"    }\n"
+"    return 0;\n"
+"}\n";
+
+void cmd_guidemo(int argc, char **argv) {
+    int code = 0;
+    char *av[] = { "guidemo", 0 };
+    if (tcc_os_run_source_ring3("guidemo", guidemo_src, 1, av, &code) == 0)
+        klogf("[guidemo] exited with code %d\n", code);
 }

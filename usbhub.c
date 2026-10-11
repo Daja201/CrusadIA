@@ -91,6 +91,8 @@ void usbhub_poll(void) {
                     usb_enumerate_device(hub->dev->hcd, hub->dev->address, p, speed);
                 } else if (!connected) {
                     hub->port_present[p] = 0;
+                    usb_device_t* child = usb_find_child_device(hub->dev->address, p);
+                    if (child) usb_free_device(child);
                 }
             }
         }

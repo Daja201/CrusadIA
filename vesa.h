@@ -10,6 +10,7 @@ extern int capp_x;
 extern int capp_y;
 uint32_t Wwidth(void);
 uint32_t Hheight(void);
+uint32_t Wpitch(void);
 void vesa_scroll(int lines);
 void vesa_init_from_params(uint32_t phys_addr, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch);
 void vesa_putpixel(int x, int y, uint32_t color);
@@ -29,4 +30,7 @@ extern int screen_app_mode;
 void screen_appmode(void);
 void clock_draw();
 void mouse_draw();
+void vesa_draw_button(int x, int y, int w, int h, uint32_t color, const char* label, void (*on_click)(void));
+void vesa_buttons_clear(void);
+void vesa_buttons_poll(void);
 #endif

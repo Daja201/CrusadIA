@@ -27,7 +27,12 @@ usb_device_t* usb_alloc_device(usb_hcd_t* hcd) {
 }
 
 void usb_free_device(usb_device_t* dev) {
-    if (dev) dev->in_use = 0;
+    if (!dev) return;
+    if (dev->hcd && dev->hcd->release_device) {
+        dev->hcd->release_device(dev->hcd, dev);
+    }
+    dev->hcd_priv = 0;
+    dev->in_use = 0;
 }
 
 int usb_control_transfer(usb_device_t* dev, uint8_t bmRequestType, uint8_t bRequest, uint16_t wValue, uint16_t wIndex, void* buf, uint16_t wLength) {
@@ -184,6 +189,15 @@ int usb_device_count(void) {
         if (g_devices[i].in_use) count++;
     }
     return count;
+}
+
+usb_device_t* usb_find_child_device(int hub_addr, int hub_port) {
+    for (int i = 0; i < USB_MAX_DEVICES; i++) {
+        if (g_devices[i].in_use && g_devices[i].hub_addr == hub_addr && g_devices[i].hub_port == hub_port) {
+            return &g_devices[i];
+        }
+    }
+    return 0;
 }
 
 usb_device_t* usb_get_device(int index) {

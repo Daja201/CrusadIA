@@ -10,7 +10,7 @@
 #define SCRIBER_MODE_EDIT 0
 #define SCRIBER_MODE_MENU 1
 #define SCRIBER_MODE_FNAME 2
-#define SCRIBER_VIEW_H 1064
+#define SCRIBER_BAR_H 16
 #define SCRIBER_MAX_ROWS 600
 
 static char scriber_buf[SCRIBER_BUF_SIZE];
@@ -104,7 +104,7 @@ static void scriber_build_rows(void) {
             continue;
         }
         x += 8;
-        if (x > 1920 - 8) {
+        if (x > (int)Wwidth() - 8) {
             x = 1;
             if (scriber_row_count < SCRIBER_MAX_ROWS) scriber_row_starts[scriber_row_count++] = i + 1;
         }
@@ -121,7 +121,8 @@ static int scriber_row_of(int idx) {
 }
 
 static void scriber_adjust_scroll(void) {
-    int max_rows = SCRIBER_VIEW_H / 8;
+    int view_h = (int)Hheight() - SCRIBER_BAR_H;
+    int max_rows = view_h / 8;
     int cur_row = scriber_row_of(scriber_pos);
     if (cur_row < scriber_top_row) {
         scriber_top_row = cur_row;
@@ -136,7 +137,8 @@ static void scriber_adjust_scroll(void) {
 static void scriber_redraw(void) {
     scriber_build_rows();
     scriber_adjust_scroll();
-    vesa_draw_rec(0, 0, 1920, SCRIBER_VIEW_H, 0x000000);
+    int view_h = (int)Hheight() - SCRIBER_BAR_H;
+    vesa_draw_rec(0, 0, Wwidth(), view_h, 0x000000);
     int start = scriber_row_starts[scriber_top_row];
     int x = 1, y = 1;
     int cur_x = 1, cur_y = 1;
@@ -154,27 +156,29 @@ static void scriber_redraw(void) {
         }
         vesa_draw_char_34(c, x, y, 0xFFFFFF, 0x000000);
         x += 8;
-        if (x > 1920 - 8) {
+        if (x > (int)Wwidth() - 8) {
             x = 1;
             y += 8;
         }
-        if (y > SCRIBER_VIEW_H - 8) break;
+        if (y > view_h - 8) break;
     }
     vesa_draw_rec(cur_x, cur_y + 1, 3, 7, 0xFFFF00);
 }
 
 static void scriber_draw_menu(void) {
-    vesa_draw_rec(0, 1064, 1920, 16, 0x202020);
-    scriber_draw_text("ESC:resume  s:save  d:discard", 8, 1068, 0xFFFF00);
+    int bar_y = (int)Hheight() - SCRIBER_BAR_H;
+    vesa_draw_rec(0, bar_y, Wwidth(), SCRIBER_BAR_H, 0x202020);
+    scriber_draw_text("ESC:resume  s:save  d:discard", 8, bar_y + 4, 0xFFFF00);
 }
 
 static void scriber_draw_fname(void) {
-    vesa_draw_rec(0, 1064, 1920, 16, 0x202020);
-    scriber_draw_text("filename (enter to save, esc to cancel): ", 8, 1068, 0xFFFF00);
+    int bar_y = (int)Hheight() - SCRIBER_BAR_H;
+    vesa_draw_rec(0, bar_y, Wwidth(), SCRIBER_BAR_H, 0x202020);
+    scriber_draw_text("filename (enter to save, esc to cancel): ", 8, bar_y + 4, 0xFFFF00);
     char tmp[SCRIBER_FNAME_SIZE + 1];
     for (int i = 0; i < scriber_fname_len; i++) tmp[i] = scriber_fname[i];
     tmp[scriber_fname_len] = 0;
-    scriber_draw_text(tmp, 8 + 42 * 8, 1068, 0xFFFFFF);
+    scriber_draw_text(tmp, 8 + 42 * 8, bar_y + 4, 0xFFFFFF);
 }
 
 static void scriber_exit(void) {

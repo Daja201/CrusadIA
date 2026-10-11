@@ -66,8 +66,10 @@ void busy_ms(int ms) {
 }
 
 void cmd_cow(int argc, char** argv) {
+    uint32_t screen_width = Wwidth();
+    uint32_t screen_height = Hheight();
     vesa_clear(0x000000);
-    vesa_draw_rec(0, 1070, 1920, 10, 0x00FF00);
+    vesa_draw_rec(0, screen_height - 10, screen_width, 10, 0x00FF00);
     vesa_swap();
     const char *cow[] = {
         "          (__) ",
@@ -81,10 +83,10 @@ void cmd_cow(int argc, char** argv) {
     const int char_w = 8;
     const int char_h = 8;
     int cow_width_px = 15 * char_w;
-    int x_start = (1080 - cow_width_px) / 2;
+    int x_start = ((int)screen_width - cow_width_px) / 2;
     if (x_start < 0) x_start = 0;
     int top_y = 10;
-    int bottom_y = 1020;
+    int bottom_y = (int)screen_height - 60;
     const int frames_per_jump = 30;
     const int ms_per_frame = 60;
     int prev_y = top_y;
@@ -203,12 +205,16 @@ void cmd_shutdown(int argc, char** argv) {
     kklog_color("\nPREPARING FS...\n", 0xFF0000);
     vfs_shutdown();
     busy_ms(1000);
-    vesa_draw_rec(0, 0, 1920, 1080, 0x000000);
+    uint32_t screen_width = Wwidth();
+    uint32_t screen_height = Hheight();
+    vesa_draw_rec(0, 0, screen_width, screen_height, 0x000000);
     const char* verse = "When you lie down, you will not be afraid. Yes, you will lie down, and your sleep will be sweet. (PROVERBS 3:24)";
     const char* msg = "IT IS NOW SAFE TO TURN OFF YOUR COMPUTER. GOOD NIGHT :)";
-    int start_x_msg = (1920 - (strlen(msg) * 8)) / 2;
-    int start_y_msg = 350;
-    int start_x_verse = (1920 - (strlen(verse) * 8)) / 2;
+    int start_x_msg = ((int)screen_width - (int)(strlen(msg) * 8)) / 2;
+    if (start_x_msg < 0) start_x_msg = 0;
+    int start_y_msg = (int)screen_height / 2;
+    int start_x_verse = ((int)screen_width - (int)(strlen(verse) * 8)) / 2;
+    if (start_x_verse < 0) start_x_verse = 0;
     int start_y_verse = start_y_msg - 20;
     for (int i = 0; verse[i] != '\0'; i++) {
         vesa_draw_char(verse[i], start_x_verse + (i * 8), start_y_verse, 0x2BC7FB, 0x000000);
@@ -828,6 +834,7 @@ command_t commands[] = {
     {"blink", cmd_blink},
     {"debug", cmd_debug},
     {"cc", cmd_cc},
+    {"guidemo", cmd_guidemo},
     {"showimage", cmd_showimage},
     {"exec", cmd_exec},
 };

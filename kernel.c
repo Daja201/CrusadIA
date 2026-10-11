@@ -37,6 +37,7 @@ void system_main_task() {
         int needs_redraw = 0;
         extern volatile int usb_kbd_dirty;
         usb_poll_all();  // updates state of usb devs
+        vesa_buttons_poll();
         if (usb_kbd_dirty) { //check for queued keystrokles (usb)
             usb_kbd_dirty = 0;
             needs_redraw = 1;
@@ -76,7 +77,7 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     c_y = 0;
     logo();
     klog_status("PAGING OK", 0x00FF00);
-    klog_status("VESA OK", 0x00FF00);
+    klogf_color("sysmsg: VESA OK %dx%dx%d\n", 0x00FF00, Wwidth(), Hheight(), boot_fb_bpp);
     drives();
     vfs_init();
     klog_status("FILESYSTEM OK", 0x00FF00);

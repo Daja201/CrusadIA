@@ -11,8 +11,8 @@
 #include "pmm.h"
 #include "rtc.h"
 
-#define SCREEN_W 1920
-#define SCREEN_H 1080
+#define SCREEN_W Wwidth()
+#define SCREEN_H Hheight()
 
 void klog_color(const char* msg, uint32_t color) {
     while (*msg != '\0') {

@@ -34,6 +34,9 @@ static usb_device_t* g_active = 0;
 
 int pl2303_probe(usb_device_t* dev) {
     if (!dev) return 0;
+    if (g_active && !g_active->in_use) {
+        g_active = 0;
+    }
     uint16_t vid = dev->dev_desc.idVendor;
     uint16_t pid = dev->dev_desc.idProduct;
     for (int i = 0; i < PL2303_KNOWN_ID_COUNT; i++) {
@@ -128,5 +131,8 @@ int pl2303_read(usb_device_t* dev, uint8_t* buf, int maxlen) {
 }
 
 usb_device_t* pl2303_get_active(void) {
+    if (g_active && !g_active->in_use) {
+        g_active = 0;
+    }
     return g_active;
 }

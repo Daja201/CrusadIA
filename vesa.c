@@ -31,6 +31,7 @@ static int mouse_has_saved = 0;
 // reports screen size from bootloader
 uint32_t Wwidth(void)  { return fb_width; }
 uint32_t Hheight(void) { return fb_height; }
+uint32_t Wpitch(void)  { return fb_pitch; }
 
 // initializes memory part for vesa buffers
 void vesa_init_from_params(uint32_t phys_addr, uint32_t width, uint32_t height, uint32_t bpp, uint32_t pitch) {
@@ -262,6 +263,95 @@ void mouse_draw() {
     mouse_prev_x = mouse_x;
     mouse_prev_y = mouse_y;
     mouse_has_saved = 1;
+}
+
+#define VESA_MAX_BUTTONS 32
+
+typedef struct {
+    int x, y, w, h;
+    uint32_t color;
+    char label[32];
+    void (*on_click)(void);
+    int active;
+} vesa_button_t;
+
+static vesa_button_t g_buttons[VESA_MAX_BUTTONS];
+static int g_button_count = 0;
+
+static uint32_t vesa_darken(uint32_t color) {
+    uint32_t r = (color >> 16) & 0xFF;
+    uint32_t g = (color >> 8) & 0xFF;
+    uint32_t b = color & 0xFF;
+    r = r > 40 ? r - 40 : 0;
+    g = g > 40 ? g - 40 : 0;
+    b = b > 40 ? b - 40 : 0;
+    return (r << 16) | (g << 8) | b;
+}
+
+void vesa_draw_button(int x, int y, int w, int h, uint32_t color, const char* label, void (*on_click)(void)) {
+    if (!vesa_ready || w <= 0 || h <= 0) return;
+
+    vesa_draw_rec(x, y, w, h, color);
+    uint32_t border = vesa_darken(color);
+    vesa_draw_hor(x, y, w, border);
+    vesa_draw_hor(x, y + h - 1, w, border);
+    vesa_draw_ver(x, y, h, border);
+    vesa_draw_ver(x + w - 1, y, h, border);
+
+    if (label) {
+        int len = 0;
+        while (label[len] && len < 31) len++;
+        int text_w = len * 8;
+        int lx = x + (w - text_w) / 2;
+        int ly = y + (h - 8) / 2;
+        if (lx < x) lx = x;
+        if (ly < y) ly = y;
+        for (int i = 0; i < len; i++) {
+            vesa_draw_char(label[i], lx + i * 8, ly, 0xFFFFFF, color);
+        }
+    }
+
+    vesa_button_t* slot = 0;
+    for (int i = 0; i < g_button_count; i++) {
+        if (g_buttons[i].active && g_buttons[i].x == x && g_buttons[i].y == y) {
+            slot = &g_buttons[i];
+            break;
+        }
+    }
+    if (!slot && g_button_count < VESA_MAX_BUTTONS) {
+        slot = &g_buttons[g_button_count++];
+    }
+    if (!slot) return;
+
+    slot->x = x;
+    slot->y = y;
+    slot->w = w;
+    slot->h = h;
+    slot->color = color;
+    slot->on_click = on_click;
+    slot->active = 1;
+    int i = 0;
+    if (label) {
+        for (; label[i] && i < 31; i++) slot->label[i] = label[i];
+    }
+    slot->label[i] = 0;
+}
+
+void vesa_buttons_clear(void) {
+    g_button_count = 0;
+    for (int i = 0; i < VESA_MAX_BUTTONS; i++) g_buttons[i].active = 0;
+}
+
+void vesa_buttons_poll(void) {
+    int mx, my;
+    if (!mouse_poll_click(&mx, &my)) return;
+    for (int i = 0; i < g_button_count; i++) {
+        vesa_button_t* b = &g_buttons[i];
+        if (!b->active) continue;
+        if (mx >= b->x && mx < b->x + b->w && my >= b->y && my < b->y + b->h) {
+            if (b->on_click) b->on_click();
+        }
+    }
 }
 
 void screen_appmode() {

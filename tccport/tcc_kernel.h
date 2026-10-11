@@ -30,4 +30,6 @@ int tcc_os_compile_obj_source(const char *name, const char *source, const char *
  *                 cc -c <file.c> -o <out.o>  (writes the .o to the drive) */
 void cmd_cc(int argc, char **argv);
 
+void cmd_guidemo(int argc, char **argv);
+
 #endif

@@ -232,6 +232,7 @@ static int ohci_setup_interrupt_in(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t e
 void ohci_poll_interrupts(void) {
     for (int i = 0; i < g_intr_ctx_count; i++) {
         ohci_intr_ctx_t* ctx = &g_intr_ctx[i];
+        if (!ctx->dev) continue;
         uint32_t head = ctx->ed->head_td & ~0xF;
         if (head != (uint32_t)(uintptr_t)ctx->td) {
             int cc = (ctx->td->control & OHCI_TD_CC_MASK) >> OHCI_TD_CC_SHIFT;
@@ -293,6 +294,18 @@ static void ohci_probe_root_ports(ohci_hc_t* hc) {
     }
 }
 
+static void ohci_release_device(usb_hcd_t* hcdp, usb_device_t* dev) {
+    (void)hcdp;
+    for (int i = 0; i < g_intr_ctx_count; i++) {
+        ohci_intr_ctx_t* ctx = &g_intr_ctx[i];
+        if (ctx->dev == dev) {
+            ctx->ed->control |= OHCI_ED_SKIP;
+            ctx->dev = 0;
+        }
+    }
+    dev->hcd_priv = 0;
+}
+
 usb_hcd_t* ohci_probe_and_init(uint32_t bar0_phys) {
     if (g_hc_count >= OHCI_MAX_HC) return 0;
     ohci_hc_t* hc = &g_hc[g_hc_count++];
@@ -337,6 +350,7 @@ usb_hcd_t* ohci_probe_and_init(uint32_t bar0_phys) {
     hc->hcd.control_transfer = ohci_do_control;
     hc->hcd.setup_interrupt_in = ohci_setup_interrupt_in;
     hc->hcd.bulk_transfer = ohci_bulk_transfer;
+    hc->hcd.release_device = ohci_release_device;
     hc->hcd.priv = hc;
 
     klog_status("OHCI CONTROLLER STARTED", 0x00FF00);

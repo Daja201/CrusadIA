@@ -168,27 +168,38 @@ void fault_handler(registers_t *regs) {
             klogf_color("EXCEPTION: %d | EIP: 0x%x | ERR: 0x%x\n", 0x00FF00, regs->int_no, regs->eip, regs->err_code);
             extern void vesa_swap(void);
             vesa_swap();
-            for (int y = 0; y < 8; y++) {
-                for (int x = 370; x < 1280; x++) {
-                    fb[y * 1280 + x] = 0x000000;
+
+            uint32_t screen_width = Wwidth();
+            uint32_t screen_height = Hheight();
+            uint32_t stride = Wpitch() / 4;
+            if (stride == 0) stride = screen_width;
+
+            int ref_w = 1280;
+            int ref_h = 720;
+
+            for (int y = 0; y < 8 && y < (int)screen_height; y++) {
+                for (int x = 370 * (int)screen_width / ref_w; x < (int)screen_width; x++) {
+                    fb[y * stride + x] = 0x000000;
                 }
             }
-            for (int x = 1280 * 8; x < 1280 * 720; x++) {
-                fb[x] = 0x000000;
-            }
-            for (int y = 300; y < 330; y++) {
-                for (int x = 400; x < 550; x++) {
-                    fb[y * 1280 + x] = 0xFF0000;
+            for (int y = 8; y < (int)screen_height; y++) {
+                for (int x = 0; x < (int)screen_width; x++) {
+                    fb[y * stride + x] = 0x000000;
                 }
             }
-            for (int y = 300; y < 330; y++) {
-                for (int x = 730; x < 880; x++) {
-                    fb[y * 1280 + x] = 0xFF0000;
+            for (int y = 300 * (int)screen_height / ref_h; y < 330 * (int)screen_height / ref_h; y++) {
+                for (int x = 400 * (int)screen_width / ref_w; x < 550 * (int)screen_width / ref_w; x++) {
+                    fb[y * stride + x] = 0xFF0000;
                 }
             }
-            for (int y = 420; y < 450; y++) {
-                for (int x = 550; x < 730; x++) {
-                    fb[y * 1280 + x] = 0xFF0000;
+            for (int y = 300 * (int)screen_height / ref_h; y < 330 * (int)screen_height / ref_h; y++) {
+                for (int x = 730 * (int)screen_width / ref_w; x < 880 * (int)screen_width / ref_w; x++) {
+                    fb[y * stride + x] = 0xFF0000;
+                }
+            }
+            for (int y = 420 * (int)screen_height / ref_h; y < 450 * (int)screen_height / ref_h; y++) {
+                for (int x = 550 * (int)screen_width / ref_w; x < 730 * (int)screen_width / ref_w; x++) {
+                    fb[y * stride + x] = 0xFF0000;
                 }
             }
         }

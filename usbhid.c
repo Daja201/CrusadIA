@@ -13,6 +13,19 @@
 volatile int mouse_x = 640, mouse_y = 360;
 volatile int mouse_dirty = 0;
 volatile uint8_t mouse_buttons = 0;
+volatile int mouse_click_pending = 0;
+volatile int mouse_click_x = 0;
+volatile int mouse_click_y = 0;
+volatile uint8_t mouse_click_button = 0;
+static uint8_t g_mouse_prev_buttons = 0;
+
+int mouse_poll_click(int* out_x, int* out_y) {
+    if (!mouse_click_pending) return 0;
+    mouse_click_pending = 0;
+    if (out_x) *out_x = mouse_click_x;
+    if (out_y) *out_y = mouse_click_y;
+    return 1;
+}
 
 typedef struct {
     usb_device_t* dev;
@@ -93,6 +106,14 @@ static void usbhid_mouse_report(usb_device_t* dev, uint8_t* report, int len) {
     if (mouse_y > max_y) mouse_y = max_y;
 
     mouse_buttons = buttons & 0x07;
+    uint8_t pressed = (buttons & 0x07) & (uint8_t)~g_mouse_prev_buttons;
+    if (pressed) {
+        mouse_click_x = mouse_x;
+        mouse_click_y = mouse_y;
+        mouse_click_button = pressed;
+        mouse_click_pending = 1;
+    }
+    g_mouse_prev_buttons = buttons & 0x07;
     mouse_dirty = 1;
 }
 

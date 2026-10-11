@@ -118,6 +118,7 @@ typedef struct usb_hcd {
     int (*control_transfer)(struct usb_hcd* hcd, usb_device_t* dev, usb_setup_pkt_t* setup, void* buf, int len, int dir_in);
     int (*setup_interrupt_in)(struct usb_hcd* hcd, usb_device_t* dev, uint8_t ep_addr, uint16_t maxpkt, uint8_t interval, void (*callback)(usb_device_t*, uint8_t*, int));
     int (*bulk_transfer)(struct usb_hcd* hcd, usb_device_t* dev, uint8_t ep_addr, void* buf, int len, int dir_in, int* toggle);
+    void (*release_device)(struct usb_hcd* hcd, usb_device_t* dev);
     void* priv;
 } usb_hcd_t;
 
@@ -134,6 +135,7 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
 void usb_poll(void);
 int usb_device_count(void);
 usb_device_t* usb_get_device(int index);
+usb_device_t* usb_find_child_device(int hub_addr, int hub_port);
 const char* usb_speed_str(int speed);
 const char* usb_class_str(uint8_t class_code);
 
