@@ -15,6 +15,7 @@ int sac_x = 0;
 int sac_y = 0;
 
 static int cmd_pos = 0;
+static int cursor_shown_at = 0;
 
 static char cmd_history[HISTORY_SIZE][CMD_BUF_SIZE];
 static int history_count = 0;
@@ -30,21 +31,33 @@ static void screen_pos_for(int pos, int* out_x, int* out_y) {
     *out_y = sac_y + row * 8;
 }
 
+static void draw_char_at_pos(int pos) {
+    int x, y;
+    screen_pos_for(pos, &x, &y);
+    char ch = (pos < cmd_len) ? cmd_buf[pos] : ' ';
+    vesa_draw_char_34(ch, x, y, 0xFFFFFF, 0x000000);
+}
+
 static void move_cursor_to(int pos) {
-    cursor('e');
+    draw_char_at_pos(cursor_shown_at);
     screen_pos_for(pos, &c_x, &c_y);
     cursor('d');
+    cursor_shown_at = pos;
 }
 
 static void redraw_from(int from_pos, int old_len) {
     move_cursor_to(from_pos);
+    int pos = from_pos;
     for (int i = from_pos; i < cmd_len; i++) {
         char s[2] = { cmd_buf[i], 0 };
         klog(s);
+        pos = i + 1;
     }
     for (int i = cmd_len; i < old_len; i++) {
         klog(" ");
+        pos = i + 1;
     }
+    cursor_shown_at = pos;
     move_cursor_to(cmd_pos);
 }
 
@@ -98,6 +111,7 @@ static void clear_current_line(void) {
         klog("\b");
     }
     cmd_pos = 0;
+    cursor_shown_at = 0;
 }
 
 static void history_recall(int idx) {
@@ -107,6 +121,7 @@ static void history_recall(int idx) {
         cmd_len = strlen(cmd_buf);
         klog(cmd_buf);
         cmd_pos = cmd_len;
+        cursor_shown_at = cmd_len;
     }
 }
 
@@ -117,6 +132,7 @@ void terminal_show_prompt(void) {
     sac_x = c_x;
     sac_y = c_y;
     cmd_pos = 0;
+    cursor_shown_at = 0;
 }
 
 void terminal_key(char c) {
@@ -131,6 +147,7 @@ void terminal_key(char c) {
     if (cmd_len == 0) {
         sac_x = c_x;
         sac_y = c_y;
+        cursor_shown_at = 0;
     }
 
     if (c == ARROW_UP) {
@@ -179,6 +196,7 @@ void terminal_key(char c) {
         execute_command(cmd_buf);
         cmd_len = 0;
         cmd_pos = 0;
+        cursor_shown_at = 0;
         if (screen_app_mode == 0) {
             terminal_show_prompt();
         }
