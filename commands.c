@@ -23,6 +23,7 @@
 #include "pump.h"
 #include "serial.h"
 #include "tccport/tcc_kernel.h"
+#include "elf.h"
 
 #define CHUNK_SIZE 65532
 void cmd_cd(int argc, char** argv);
@@ -31,6 +32,7 @@ void cmd_mf(int argc, char** argv);
 void cmd_wr(int argc, char** argv);
 void cmd_umount(int argc, char** argv);
 void cmd_setroot(int argc, char** argv);
+void cmd_exec(int argc, char** argv);
 extern uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 extern void pci_config_write(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 
@@ -622,11 +624,25 @@ void cmd_open(int argc, char** argv) {
         else if (strcmp(dot, ".bmp") == 0) {
             cmd_showimage(argc, argv);
         }
+        else if (strcmp(dot, ".elf") == 0) {
+            cmd_exec(argc, argv);
+        }
         else {
             klog_status("UNKNOWN EXTENSION", 0xFF0000);
         }
     } else {
         klog_status("NO EXTENSION", 0xFF0000);
+    }
+}
+
+void cmd_exec(int argc, char** argv) {
+    if (argc < 2) {
+        kklogf("usage: exec <file.elf>\n");
+        return;
+    }
+    int r = elf_exec(argv[1], 1);
+    if (r != ELF_OK) {
+        klogf_color("exec: %s: %s\n", 0xFF0000, argv[1], elf_strerror(r));
     }
 }
 
@@ -808,6 +824,7 @@ command_t commands[] = {
     {"debug", cmd_debug},
     {"cc", cmd_cc},
     {"showimage", cmd_showimage},
+    {"exec", cmd_exec},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);

@@ -101,15 +101,13 @@ void create_task(void (*entry_point)(), uint32_t priority) {
         num_tasks++;
     }
     uint32_t *stack = (uint32_t *)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
-    *(--stack) = (uint32_t)task_exit;
-    *(--stack) = 0x0202;                
-    *(--stack) = 0x10;          
-    *(--stack) = (uint32_t)entry_point; 
-    *(--stack) = 0;                  
-    *(--stack) = 32;    
-    *(--stack) = 0;
-    for (int i = 0; i < 7; i++) *(--stack) = 0; 
-    for (int i = 0; i < 4; i++) *(--stack) = 0x18; 
+    *(--stack) = 0x0202;                /* eflags */
+    *(--stack) = 0x10;                  /* cs (ring0) */
+    *(--stack) = (uint32_t)entry_point; /* eip */
+    *(--stack) = 0;                     /* err_code (skipped by "add esp,8") */
+    *(--stack) = 32;                    /* int_no  (skipped by "add esp,8") */
+    for (int i = 0; i < 8; i++) *(--stack) = 0;    /* dummy pusha regs (eax..edi) */
+    for (int i = 0; i < 4; i++) *(--stack) = 0x18; /* dummy ds/es/fs/gs */
 
     tasks[slot].esp = (uint32_t)stack;
     tasks[slot].pid = next_pid++;

@@ -59,7 +59,7 @@ void *memcpy(void *dest, const void *src, size_t n) {
 // can write bytes of memory into virtual mem when pagings enabled
 void *memset(void *s, int c, size_t n) {
     unsigned char *p = (unsigned char*)s;
-    while (n--) *p++ = (unsigned char)c;'=';
+    while (n--) *p++ = (unsigned char)c;
     return s;
 }
 
@@ -85,7 +85,7 @@ char* itoa(int value, char* buffer, int base) {
     char *ptr = buffer;
     char *ptr1 = buffer;
     char tmp_char;
-    int tmp_value;
+    unsigned int tmp_value;
 
     if (value == 0) {
         buffer[0] = '0';
@@ -93,16 +93,22 @@ char* itoa(int value, char* buffer, int base) {
         return buffer;
     }
     int sign = 0;
+    unsigned int uvalue;
     if (value < 0 && base == 10) {
         sign = 1;
-        value = -value;
+        /* avoid UB/overflow when value == INT_MIN */
+        uvalue = (unsigned int)(-(value + 1)) + 1u;
+    } else {
+        /* non-decimal bases: use the raw two's-complement bit pattern,
+           and avoid negative remainders from value % base for value < 0 */
+        uvalue = (unsigned int)value;
     }
-    while (value != 0) {
-        tmp_value = value % base;
+    while (uvalue != 0) {
+        tmp_value = uvalue % (unsigned int)base;
         *ptr++ = (tmp_value < 10)
-            ? tmp_value + '0'
-            : tmp_value - 10 + 'A';
-        value /= base;
+            ? (char)(tmp_value + '0')
+            : (char)(tmp_value - 10 + 'A');
+        uvalue /= (unsigned int)base;
     }
     if (sign)
         *ptr++ = '-';

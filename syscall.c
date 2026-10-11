@@ -20,7 +20,7 @@ uint32_t syscall_dispatch(registers_t *regs) {
             const char *buf = (const char *)regs->ebx;
             uint32_t len = regs->ecx;
             if (!buf) return (uint32_t)-1;
-            for (uint32_t i = 0; i < len && buf[i]; i++) {
+            for (uint32_t i = 0; i < len; i++) {
                 char c[2] = { buf[i], 0 };
                 klog(c);
             }
