@@ -4,12 +4,20 @@
 #include "task.h"
 #include "serial.h"
 
+#ifndef CRUSADIA_SERIAL_DEBUG
+#define CRUSADIA_SERIAL_DEBUG 0
+#endif
+#if CRUSADIA_SERIAL_DEBUG
 static void dbgw(const char *s) { while (*s) write_serial(*s++); }
 static void dbgwx(unsigned int v) {
     const char *h = "0123456789ABCDEF";
     write_serial('0'); write_serial('x');
     for (int i = 28; i >= 0; i -= 4) write_serial(h[(v >> i) & 0xF]);
 }
+#else
+static inline void dbgw(const char *s) { (void)s; }
+static inline void dbgwx(unsigned int v) { (void)v; }
+#endif
 
 #define HEAP_MAGIC 0x5A4C534A
 #define ALIGN 8
@@ -29,13 +37,19 @@ typedef struct heap_block_header block_header_t;
 
 static heap_arena_t kernel_heap_arena;
 
+static inline int running_at_ring0(void) {
+    uint16_t cs;
+    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+    return (cs & 3) == 0;
+}
 static inline uint32_t irq_save(void) {
     uint32_t flags;
-    __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory", "cc");
+    __asm__ volatile("pushfl; popl %0" : "=r"(flags) :: "memory", "cc");
+    if (running_at_ring0()) __asm__ volatile("cli" ::: "memory", "cc");
     return flags;
 }
 static inline void irq_restore(uint32_t flags) {
-    __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
+    if (running_at_ring0()) __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "memory", "cc");
 }
 
 void heap_init(void) {

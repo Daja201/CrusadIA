@@ -2,6 +2,18 @@
 #include "stdint.h"
 #include "heap.h"
 #include "task.h"
+#include "serial.h"
+
+#ifndef CRUSADIA_SERIAL_DEBUG
+#define CRUSADIA_SERIAL_DEBUG 0
+#endif
+static void dbgw_vsn(const char *s) {
+#if CRUSADIA_SERIAL_DEBUG
+    while (*s) write_serial(*s++);
+#else
+    (void)s;
+#endif
+}
 
 //compares 2 strings by ASCII character valuables 
 int strcmp(const char* a, const char* b) {
@@ -319,6 +331,7 @@ static void vs_emit(vs_out_t *o, const char *prefix, int zeros, const char *body
 }
 
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list args) {
+    dbgw_vsn("vsnprintf enter\n");
     vs_out_t o = { buf, size, 0 };
     for (const char *f = fmt; *f; f++) {
         if (*f != '%') { vs_put(&o, *f); continue; }
@@ -447,6 +460,7 @@ int vsnprintf(char* buf, size_t size, const char* fmt, va_list args) {
         }
     }
     if (size > 0) buf[o.pos < size ? o.pos : size - 1] = '\0';
+    dbgw_vsn("vsnprintf done\n");
     return (int)o.pos;
 }
 

@@ -11,6 +11,18 @@
 #include <unistd.h>
 #include "klog.h"
 #include "rtc.h"
+#include "serial.h"
+
+#ifndef CRUSADIA_SERIAL_DEBUG
+#define CRUSADIA_SERIAL_DEBUG 0
+#endif
+static void dbgw(const char *s) {
+#if CRUSADIA_SERIAL_DEBUG
+    while (*s) write_serial(*s++);
+#else
+    (void)s;
+#endif
+}
 
 int errno;
 static char *empty_environ[1] = { 0 };
@@ -288,17 +300,12 @@ FILE *stderr = &std_streams[2];
 static int is_console(FILE *f) { return f == stdout || f == stderr; }
 
 int vfprintf(FILE *f, const char *fmt, va_list ap) {
-    va_list ap2;
-    va_copy(ap2, ap);
-    int n = vsnprintf(0, 0, fmt, ap2);
-    va_end(ap2);
+    char buf[1024];
+    int n = vsnprintf(buf, sizeof buf, fmt, ap);
     if (n < 0) return n;
-    char *buf = (char *)malloc((size_t)n + 1);
-    if (!buf) return -1;
-    vsnprintf(buf, (size_t)n + 1, fmt, ap);
+    int len = n < (int)sizeof buf ? n : (int)sizeof buf - 1;
     if (is_console(f)) klog(buf);
-    else if (f) fwrite(buf, 1, (size_t)n, f);
-    free(buf);
+    else if (f) fwrite(buf, 1, (size_t)len, f);
     return n;
 }
 
@@ -310,16 +317,20 @@ int fprintf(FILE *f, const char *fmt, ...) {
 }
 
 int printf(const char *fmt, ...) {
+    dbgw("printf enter\n");
     va_list ap; va_start(ap, fmt);
     int n = vfprintf(stdout, fmt, ap);
     va_end(ap);
+    dbgw("printf done\n");
     return n;
 }
 
 int sprintf(char *buf, const char *fmt, ...) {
+    dbgw("sprintf enter\n");
     va_list ap; va_start(ap, fmt);
     int n = vsnprintf(buf, 0x7FFFFFFF, fmt, ap);
     va_end(ap);
+    dbgw("sprintf done\n");
     return n;
 }
 
