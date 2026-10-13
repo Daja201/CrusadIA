@@ -32,4 +32,6 @@ void cmd_cc(int argc, char **argv);
 
 void cmd_guidemo(int argc, char **argv);
 
+extern volatile int tcc_guest_blocking;
+
 #endif

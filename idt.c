@@ -7,6 +7,18 @@
 #include "task.h"
 #include "vfs.h"
 #include "paging.h"
+#include "serial.h"
+
+/* Minimal, allocation-free, printf-free serial dump used only from the fault
+ * handler: a crashing kernel cannot safely rely on printf/klog (which may
+ * themselves touch the heap, the thing that might be the reason we're here)
+ * so this writes straight to the COM1 UART one byte at a time. */
+static void dbg_serial_str(const char *s) { while (*s) write_serial(*s++); }
+static void dbg_serial_hex(uint32_t v) {
+    const char *hex = "0123456789ABCDEF";
+    write_serial('0'); write_serial('x');
+    for (int i = 28; i >= 0; i -= 4) write_serial(hex[(v >> i) & 0xF]);
+}
 
 extern uint32_t boot_fb_addr; 
 extern uint32_t boot_fb_width;
@@ -159,6 +171,18 @@ void fault_handler(registers_t *regs) {
                 asm volatile("sti; hlt");
             }
         }
+        {
+            uint32_t cr2_dump;
+            asm volatile("mov %%cr2, %0" : "=r"(cr2_dump));
+            dbg_serial_str("\n[FAULT/serial] ring0 exception int_no="); dbg_serial_hex(regs->int_no);
+            dbg_serial_str(" eip="); dbg_serial_hex(regs->eip);
+            dbg_serial_str(" err="); dbg_serial_hex(regs->err_code);
+            dbg_serial_str(" cr2="); dbg_serial_hex(cr2_dump);
+            dbg_serial_str(" esp="); dbg_serial_hex(regs->esp);
+            dbg_serial_str(" cs="); dbg_serial_hex(regs->cs);
+            dbg_serial_str("\n");
+        }
+
         asm volatile("cli");
         
         if (boot_fb_addr != 0) {

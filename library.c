@@ -41,7 +41,7 @@ static const lib_entry_t lib_entries[] = {
     {"ss",     "ADVANCED", "ss <character>",                  "sends serial on COM1"},
     {"app",      "ADVANCED", "app <app_name>",         "runs an app"},
     {"cc",       "ADVANCED", "cc <file.c> [args] | cc -e \"<code>\"", "compiles a C file in memory with TinyCC and runs it"},
-    {"guidemo",  "ADVANCED", "guidemo",                 "runs an example ring3 GUI program with clickable mouse buttons"},
+    {"guidemo",  "ADVANCED", "guidemo [crash]",         "ring3 API self-test: klogf()'s before/after each step so a freeze/crash shows exactly where; 'crash' also tests the forbidden-op/fault path"},
 };
 
 static const int lib_entry_count = sizeof(lib_entries) / sizeof(lib_entry_t);

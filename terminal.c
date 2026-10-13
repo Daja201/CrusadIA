@@ -4,6 +4,7 @@
 #include "string.h"
 #include "vesa.h"
 #include "app.h"
+#include "tccport/tcc_kernel.h"
 
 #define HISTORY_SIZE 16
 
@@ -76,6 +77,10 @@ void execute_command(char* line) {
         if (*p) *p++ = 0;
     }
     if (argc == 0) {
+        return;
+    }
+    if (tcc_guest_blocking) {
+        klog("a cc/guidemo program is already running, ignoring input\n");
         return;
     }
     for (int i = 0; i < command_count; i++) { 

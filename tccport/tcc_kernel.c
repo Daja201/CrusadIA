@@ -28,8 +28,30 @@
 #include "syscall.h"
 #include "ring3fs.h"
 #include "usbhid.h"
+#include "serial.h"
+
+/* Raw, unbuffered debug channel straight to COM1 (write_serial polls the
+ * UART directly, byte by byte -- no heap, no stdio, no framebuffer, no
+ * dependency on any interrupt to "flush" it later). Watch it with QEMU's
+ * -serial stdio (or whatever your run target already wires COM1 to). If a
+ * dbg_serial() line that is the literal first statement of a function does
+ * not show up here, either that function was never reached/compiled in
+ * (stale tcc_kernel.o -- do a clean rebuild: `rm tccport/tcc_kernel.o`
+ * before `make`), or the CPU is wedged (interrupts off, tight loop, triple
+ * fault) before even that single outb() can run. */
+static void dbg_serial(const char *s) {
+    while (*s) { write_serial(*s); s++; }
+}
+static void dbg_serial_hex(uint32_t v) {
+    const char *hex = "0123456789ABCDEF";
+    write_serial('0'); write_serial('x');
+    for (int i = 28; i >= 0; i -= 4) write_serial(hex[(v >> i) & 0xF]);
+}
 
 extern volatile uint32_t system_ticks;   /* idt.c, 1000 Hz PIT tick */
+extern void usb_poll_all(void);
+
+volatile int tcc_guest_blocking = 0;
 
 /* ------------------------------------------------ what programs may call */
 
@@ -70,6 +92,25 @@ static void ring3_sleep_ms(uint32_t ms) {
     uint32_t target = system_ticks + ms;
     while ((int32_t)(system_ticks - target) < 0)
         __asm__ volatile ("int $0x80" : : "a"(SYS_YIELD) : "memory");
+}
+
+extern int current_task;
+
+static void* r3_malloc(size_t size) {
+    if (current_task < 0) return 0;
+    return heap_arena_alloc(&tasks[current_task].heap, size, current_task);
+}
+static void r3_free(void *ptr) {
+    if (current_task < 0) return;
+    heap_arena_free(&tasks[current_task].heap, ptr);
+}
+static void* r3_calloc(size_t nmemb, size_t size) {
+    if (current_task < 0) return 0;
+    return heap_arena_calloc(&tasks[current_task].heap, nmemb, size, current_task);
+}
+static void* r3_realloc(void *ptr, size_t size) {
+    if (current_task < 0) return 0;
+    return heap_arena_realloc(&tasks[current_task].heap, ptr, size, current_task);
 }
 
 #define SYM(x)        { #x, (const void *)&x }
@@ -131,7 +172,8 @@ static const struct { const char *name; const void *addr; } guest_syms_ring3[] =
     SYM(printf), SYM(fprintf), SYM(sprintf), SYM(snprintf), SYM(vsnprintf), SYM(vfprintf),
     SYM(puts), SYM(putchar), SYM(fputs), SYM(fputc), SYM(fflush), SYM(fwrite),
     SYM(stdin), SYM(stdout), SYM(stderr),
-    SYM(malloc), SYM(calloc), SYM(realloc), SYM(free),
+    SYM_AS("malloc", r3_malloc), SYM_AS("calloc", r3_calloc),
+    SYM_AS("realloc", r3_realloc), SYM_AS("free", r3_free),
     SYM_AS("exit", ring3_exit_stub), SYM_AS("abort", ring3_abort_stub),
     SYM(abs), SYM(atoi), SYM(strtol), SYM(strtoul), SYM(strtod), SYM(qsort), SYM(bsearch), SYM(itoa),
     SYM(memcpy), SYM(memmove), SYM(memset), SYM(memcmp), SYM(memchr),
@@ -281,19 +323,26 @@ fail:
 #define STACK_MIN  (128 * 1024)
 
 static int on_big_stack(int (*fn)(void *), void *arg) {
+    dbg_serial("[dbg/serial] on_big_stack: entered\n");
     size_t sz = STACK_WANT;
     uint8_t *mem = 0;
     while (sz >= STACK_MIN && !(mem = (uint8_t *)malloc(sz))) sz /= 2;
     if (!mem) { kklog("cc: not enough memory for the compiler stack"); return -1; }
+    dbg_serial("[dbg/serial] on_big_stack: got stack mem at "); dbg_serial_hex((uint32_t)(uintptr_t)mem);
+    dbg_serial(" size "); dbg_serial_hex((uint32_t)sz); dbg_serial("\n");
     memset(mem, 0xA5, 64);                            /* overflow canary */
 
+    dbg_serial("[dbg/serial] on_big_stack: tcc_os_fpu_init()\n");
     tcc_os_fpu_init();
     uintptr_t top = ((uintptr_t)mem + sz) & ~(uintptr_t)15;
+    dbg_serial("[dbg/serial] on_big_stack: switching stack to "); dbg_serial_hex((uint32_t)top); dbg_serial("\n");
     int rc = tcc_os_call_on_stack((void *)top, fn, arg);
+    dbg_serial("[dbg/serial] on_big_stack: back on original stack, rc="); dbg_serial_hex((uint32_t)rc); dbg_serial("\n");
 
     for (int i = 0; i < 64; i++)
         if (mem[i] != 0xA5) { kklog("cc: WARNING: compiler stack overflowed (program too big/deep?)"); break; }
     free(mem);
+    dbg_serial("[dbg/serial] on_big_stack: done\n");
     return rc;
 }
 
@@ -334,20 +383,38 @@ static int do_run_ring3(void *arg) {
     run_req_t *r = (run_req_t *)arg;
     int (*entry)(int, char **);
 
-    TCCState *s = tcc_new();
-    if (!s) { kklog("cc: tcc_new() failed (out of memory?)"); return -1; }
-    tcc_set_error_func(s, 0, tcc_error_cb);
-    tcc_set_options(s, "-nostdlib");
-    if (tcc_set_output_type(s, TCC_OUTPUT_MEMORY) < 0) goto fail;
+    dbg_serial("[dbg/serial] do_run_ring3: entered (on switched stack)\n");
 
+    dbg_serial("[dbg/serial] do_run_ring3: calling tcc_new()\n");
+    TCCState *s = tcc_new();
+    if (!s) { dbg_serial("[dbg/serial] do_run_ring3: tcc_new() returned NULL\n"); kklog("cc: tcc_new() failed (out of memory?)"); return -1; }
+    dbg_serial("[dbg/serial] do_run_ring3: tcc_new() -> "); dbg_serial_hex((uint32_t)(uintptr_t)s); dbg_serial("\n");
+
+    dbg_serial("[dbg/serial] do_run_ring3: calling tcc_set_error_func()\n");
+    tcc_set_error_func(s, 0, tcc_error_cb);
+    dbg_serial("[dbg/serial] do_run_ring3: tcc_set_error_func ok, calling tcc_set_options(-nostdlib)\n");
+    tcc_set_options(s, "-nostdlib");
+    dbg_serial("[dbg/serial] do_run_ring3: tcc_set_options ok\n");
+    dbg_serial("[dbg/serial] do_run_ring3: tcc_set_output_type(MEMORY)\n");
+    if (tcc_set_output_type(s, TCC_OUTPUT_MEMORY) < 0) { dbg_serial("[dbg/serial] do_run_ring3: set_output_type FAILED\n"); goto fail; }
+    dbg_serial("[dbg/serial] do_run_ring3: set_output_type ok\n");
+
+    dbg_serial("[dbg/serial] do_run_ring3: adding symbols, count="); dbg_serial_hex((uint32_t)GUEST_SYM_COUNT_RING3); dbg_serial("\n");
     for (unsigned i = 0; i < GUEST_SYM_COUNT_RING3; i++)
         tcc_add_symbol(s, guest_syms_ring3[i].name, guest_syms_ring3[i].addr);
+    dbg_serial("[dbg/serial] do_run_ring3: symbols added\n");
 
-    if ((r->source ? tcc_compile_string(s, r->source) : tcc_add_file(s, r->name)) < 0) goto fail;
-    if (tcc_relocate(s) < 0) goto fail;
+    dbg_serial("[dbg/serial] do_run_ring3: compiling source, len="); dbg_serial_hex((uint32_t)(r->source ? strlen(r->source) : 0)); dbg_serial("\n");
+    if ((r->source ? tcc_compile_string(s, r->source) : tcc_add_file(s, r->name)) < 0) {
+        dbg_serial("[dbg/serial] do_run_ring3: compile FAILED\n"); goto fail;
+    }
+    dbg_serial("[dbg/serial] do_run_ring3: compile ok, relocating\n");
+    if (tcc_relocate(s) < 0) { dbg_serial("[dbg/serial] do_run_ring3: relocate FAILED\n"); goto fail; }
+    dbg_serial("[dbg/serial] do_run_ring3: relocate ok\n");
 
     entry = (int (*)(int, char **))tcc_get_symbol(s, "main");
     if (!entry) { kklog("cc: no main() function"); goto fail; }
+    dbg_serial("[dbg/serial] do_run_ring3: main() resolved at "); dbg_serial_hex((uint32_t)(uintptr_t)entry); dbg_serial("\n");
 
     r->compiled   = 1;
     g_user_entry  = entry;
@@ -356,13 +423,56 @@ static int do_run_ring3(void *arg) {
     g_user_done   = 0;
     g_user_result = 0;
 
-    create_user_task(user_entry_trampoline, 1);
-    while (!g_user_done) { __asm__ volatile ("sti; hlt"); }
-    r->exit_code = g_user_result;
+    dbg_serial("[dbg/serial] do_run_ring3: calling create_user_task()\n");
+    int slot = create_user_task(user_entry_trampoline, 1);
+    if (slot < 0) {
+        dbg_serial("[dbg/serial] do_run_ring3: create_user_task FAILED\n");
+        kklog("cc: could not create ring3 task (out of task slots or memory)");
+        goto fail;
+    }
+    dbg_serial("[dbg/serial] do_run_ring3: got task slot "); dbg_serial_hex((uint32_t)slot);
+    dbg_serial(" state="); dbg_serial_hex((uint32_t)tasks[slot].state); dbg_serial(", entering wait loop\n");
+
+    tcc_guest_blocking = 1;
+    uint32_t spins = 0;
+    uint32_t last_state = (uint32_t)-1;
+    while (!g_user_done && tasks[slot].state != TASK_DEAD) {
+        usb_poll_all();
+        __asm__ volatile ("sti; hlt");
+        spins++;
+        if (tasks[slot].state != last_state) {
+            dbg_serial("[dbg/serial] do_run_ring3: wait loop spin="); dbg_serial_hex(spins);
+            dbg_serial(" task state changed -> "); dbg_serial_hex((uint32_t)tasks[slot].state); dbg_serial("\n");
+            last_state = tasks[slot].state;
+        }
+        if ((spins & 0x3FF) == 0) {
+            /* fires roughly once a second or so at the 1 kHz PIT tick if we
+             * are genuinely spinning here and never getting switched to the
+             * new task (or it never finishes) -- vs. a true freeze (no
+             * interrupts firing at all), which would never print this. */
+            dbg_serial("[dbg/serial] do_run_ring3: still waiting, spin="); dbg_serial_hex(spins);
+            dbg_serial(" done="); dbg_serial_hex((uint32_t)g_user_done);
+            dbg_serial(" state="); dbg_serial_hex((uint32_t)tasks[slot].state);
+            dbg_serial(" ticks="); dbg_serial_hex(system_ticks); dbg_serial("\n");
+        }
+    }
+    tcc_guest_blocking = 0;
+    dbg_serial("[dbg/serial] do_run_ring3: wait loop exited after "); dbg_serial_hex(spins);
+    dbg_serial(" spins, done="); dbg_serial_hex((uint32_t)g_user_done);
+    dbg_serial(" state="); dbg_serial_hex((uint32_t)tasks[slot].state); dbg_serial("\n");
+
+    if (!g_user_done) {
+        kklog("cc: ring3 program crashed");
+        r->exit_code = -1;
+    } else {
+        r->exit_code = g_user_result;
+    }
 
     tcc_delete(s);
+    dbg_serial("[dbg/serial] do_run_ring3: returning 0\n");
     return 0;
 fail:
+    dbg_serial("[dbg/serial] do_run_ring3: returning -1 (fail)\n");
     tcc_delete(s);
     return -1;
 }
@@ -375,8 +485,11 @@ int tcc_os_run_file_ring3(const char *path, int argc, char **argv, int *exit_cod
 }
 
 int tcc_os_run_source_ring3(const char *name, const char *source, int argc, char **argv, int *exit_code) {
+    dbg_serial("[dbg/serial] tcc_os_run_source_ring3: called\n");
     run_req_t r = { name, source, argc, argv, 0, 0 };
+    dbg_serial("[dbg/serial] tcc_os_run_source_ring3: calling on_big_stack\n");
     int rc = on_big_stack(do_run_ring3, &r);
+    dbg_serial("[dbg/serial] tcc_os_run_source_ring3: on_big_stack returned\n");
     if (exit_code) *exit_code = r.exit_code;
     return (rc == 0 && r.compiled) ? 0 : -1;
 }
@@ -458,34 +571,138 @@ void cmd_cc(int argc, char **argv) {
         klogf("[cc] %s exited with code %d\n", argv[1], code);
 }
 
+/* guidemo is now a ring3 self-test: it exercises the guest_syms_ring3 API
+ * group by group, klogf()'ing "step N: ..." right before each group and
+ * "step N ok" right after. If the task freezes or faults, the last "step N"
+ * line printed (without a matching "step N ok") tells us exactly which
+ * group of calls is the culprit -- no need to guess from a silent hang.
+ *
+ * "guidemo crash" (an extra argv[1]) additionally runs one deliberately
+ * forbidden operation at the very end (step 99), to confirm the kernel's
+ * ring3 exception handler kills the task cleanly (klogf "TASK N KILLED:
+ * exception ...") instead of hanging the whole machine. That run never
+ * reaches "ALL TESTS PASSED" by design -- the crash *is* the pass. */
 static const char guidemo_src[] =
-"static void draw_text(const char* s, int x, int y, unsigned int fg, unsigned int bg) {\n"
-"    while (*s) { vesa_draw_char(*s, x, y, fg, bg); x += 8; s++; }\n"
-"}\n"
-"static int counter = 0;\n"
-"static void on_count(void) { counter++; }\n"
-"static void on_quit(void) { exit(0); }\n"
+"static void step(int n, const char* what) { klogf(\"[selftest] step %d: %s\\n\", n, what); }\n"
+"static void ok(int n) { klogf(\"[selftest] step %d ok\\n\", n); }\n"
+"\n"
+"static int cmp_int(const void* a, const void* b) { return *(int*)a - *(int*)b; }\n"
+"\n"
 "int main(int argc, char** argv) {\n"
+"    int do_crash = (argc > 1 && strcmp(argv[1], \"crash\") == 0);\n"
+"\n"
+"    klog_color(\"[selftest] ===== CrusadIA ring3 self-test starting =====\\n\", 0x60C0FF);\n"
+"\n"
+"    step(1, \"console logging (klog/kklog/klogf/klog_color)\");\n"
+"    klog(\"  klog says hi\\n\");\n"
+"    kklog(\"  kklog says hi\");\n"
+"    klogf(\"  klogf says %s %d\\n\", \"hi\", 1);\n"
+"    klog_color(\"  klog_color says hi\\n\", 0x00FF00);\n"
+"    ok(1);\n"
+"\n"
+"    step(2, \"screen size + raw pixel/line/rect drawing\");\n"
+"    int w = Wwidth, h = Hheight;\n"
+"    klogf(\"  screen is %dx%d\\n\", w, h);\n"
+"    vesa_clear(0x202030);\n"
+"    vesa_putpixel(10, 10, 0xFFFFFF);\n"
+"    vesa_draw_rec(10, 20, 40, 20, 0x3050A0);\n"
+"    vesa_draw_hor(10, 50, 60, 0xFFFFFF);\n"
+"    vesa_draw_ver(10, 10, 60, 0xFFFFFF);\n"
+"    vesa_draw_char('A', 10, 70, 0xFFFFFF, 0x202030);\n"
+"    vesa_swap();\n"
+"    ok(2);\n"
+"\n"
+"    step(3, \"mouse state read (mouse_x/mouse_y/mouse_buttons/mouse_poll_click)\");\n"
+"    int mx = mouse_x, my = mouse_y, mb = mouse_buttons;\n"
+"    klogf(\"  mouse at %d,%d buttons=%d\\n\", mx, my, mb);\n"
+"    int cx, cy;\n"
+"    mouse_poll_click(&cx, &cy);\n"
+"    ok(3);\n"
+"\n"
+"    step(4, \"timing (system_ticks + os_sleep_ms)\");\n"
+"    uint32_t t0 = system_ticks;\n"
+"    os_sleep_ms(10);\n"
+"    klogf(\"  system_ticks %u -> %u\\n\", t0, system_ticks);\n"
+"    ok(4);\n"
+"\n"
+"    step(5, \"stdio printf family (printf/sprintf/snprintf)\");\n"
+"    char pbuf[64];\n"
+"    printf(\"  printf works: %d\\n\", 42);\n"
+"    sprintf(pbuf, \"sprintf %d\", 7);\n"
+"    snprintf(pbuf, sizeof pbuf, \"snprintf %s\", \"ok\");\n"
+"    klogf(\"  %s\\n\", pbuf);\n"
+"    ok(5);\n"
+"\n"
+"    step(6, \"heap (malloc/calloc/realloc/free)\");\n"
+"    void* p1 = malloc(64);\n"
+"    void* p2 = calloc(4, 16);\n"
+"    p1 = realloc(p1, 128);\n"
+"    klogf(\"  malloc=%p calloc=%p realloc=%p\\n\", p1, p2, p1);\n"
+"    free(p1);\n"
+"    free(p2);\n"
+"    ok(6);\n"
+"\n"
+"    step(7, \"stdlib (abs/atoi/strtol/strtoul/strtod/itoa/qsort/bsearch)\");\n"
+"    char ibuf[16];\n"
+"    int arr[5] = { 5, 3, 1, 4, 2 };\n"
+"    itoa(abs(-7), ibuf, 10);\n"
+"    int v = atoi(\"123\") + (int)strtol(\"45\", 0, 10) + (int)strtoul(\"6\", 0, 10) + (int)strtod(\"1.0\", 0);\n"
+"    qsort(arr, 5, sizeof(int), cmp_int);\n"
+"    int key = 3;\n"
+"    int* found = bsearch(&key, arr, 5, sizeof(int), cmp_int);\n"
+"    klogf(\"  itoa=%s atoi/strtol/strtoul/strtod sum=%d sorted[0]=%d found=%d\\n\", ibuf, v, arr[0], found ? *found : -1);\n"
+"    ok(7);\n"
+"\n"
+"    step(8, \"string/mem functions\");\n"
+"    char sbuf[32], sbuf2[32];\n"
+"    memset(sbuf, 0, sizeof sbuf);\n"
+"    strcpy(sbuf, \"hello\");\n"
+"    strncpy(sbuf2, sbuf, sizeof sbuf2);\n"
+"    strcat(sbuf, \" world\");\n"
+"    memcpy(sbuf2, sbuf, strlen(sbuf) + 1);\n"
+"    int eq = strcmp(sbuf, sbuf2) == 0 && strncmp(sbuf, sbuf2, 5) == 0 && strcasecmp(sbuf, sbuf2) == 0;\n"
+"    char* found_s = strstr(sbuf, \"world\");\n"
+"    char* dup = strdup(sbuf);\n"
+"    klogf(\"  sbuf=%s len=%d eq=%d found=%s dup=%s\\n\", sbuf, (int)strlen(sbuf), eq, found_s ? found_s : \"(null)\", dup ? dup : \"(null)\");\n"
+"    free(dup);\n"
+"    ok(8);\n"
+"\n"
+"    step(9, \"clickable buttons (vesa_buttons_clear/vesa_draw_button/vesa_buttons_poll, one shot)\");\n"
 "    vesa_buttons_clear();\n"
-"    char buf[16];\n"
-"    for (;;) {\n"
-"        vesa_clear(0x202030);\n"
-"        draw_text(\"guidemo - click Count, click Quit to exit\", 40, 30, 0xFFFFFF, 0x202030);\n"
-"        draw_text(\"clicks: \", 40, 70, 0xC0C0C0, 0x202030);\n"
-"        itoa(counter, buf, 10);\n"
-"        draw_text(buf, 40 + 8 * 8, 70, 0xC0C0C0, 0x202030);\n"
-"        vesa_draw_button(40, 110, 140, 40, 0x3050A0, \"Count\", on_count);\n"
-"        vesa_draw_button(200, 110, 140, 40, 0xA03030, \"Quit\", on_quit);\n"
-"        vesa_swap();\n"
-"        vesa_buttons_poll();\n"
-"        os_sleep_ms(16);\n"
+"    vesa_draw_button(40, 110, 140, 40, 0x3050A0, \"Count\", 0);\n"
+"    vesa_swap();\n"
+"    vesa_buttons_poll();\n"
+"    ok(9);\n"
+"\n"
+"    step(10, \"cosfs syscalls on a path that does not exist (expect a clean error, not a crash)\");\n"
+"    int cfd = cosfs_open(\"/this_should_not_exist.tmp\", 0);\n"
+"    klogf(\"  cosfs_open -> %d\\n\", cfd);\n"
+"    if (cfd >= 0) cosfs_close(cfd);\n"
+"    ok(10);\n"
+"\n"
+"    step(11, \"fat32 syscalls on a path that does not exist (expect a clean error, not a crash)\");\n"
+"    int ffd = fat32_open(\"/this_should_not_exist.tmp\", 0);\n"
+"    klogf(\"  fat32_open -> %d\\n\", ffd);\n"
+"    if (ffd >= 0) fat32_close(ffd);\n"
+"    ok(11);\n"
+"\n"
+"    if (!do_crash) {\n"
+"        klog_color(\"[selftest] ===== ALL TESTS PASSED (run 'guidemo crash' to also test the forbidden-op path) =====\\n\", 0x00FF00);\n"
+"        return 0;\n"
 "    }\n"
+"\n"
+"    step(99, \"DELIBERATE forbidden ring0-only instruction (cli) -- this SHOULD fault and kill this task\");\n"
+"    __asm__ volatile(\"cli\");\n"
+"    klog_color(\"[selftest] step 99 did NOT fault -- unexpected!\\n\", 0xFF0000);\n"
 "    return 0;\n"
 "}\n";
 
 void cmd_guidemo(int argc, char **argv) {
     int code = 0;
-    char *av[] = { "guidemo", 0 };
-    if (tcc_os_run_source_ring3("guidemo", guidemo_src, 1, av, &code) == 0)
+    char *av[2];
+    av[0] = "guidemo";
+    av[1] = (argc > 1) ? argv[1] : 0;
+    int guest_argc = (argc > 1) ? 2 : 1;
+    if (tcc_os_run_source_ring3("guidemo", guidemo_src, guest_argc, av, &code) == 0)
         klogf("[guidemo] exited with code %d\n", code);
 }

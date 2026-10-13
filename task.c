@@ -8,7 +8,7 @@
 #define TASK_STACK_SIZE 16384
 #define TASK_KSTACK_SIZE 8192
 #define TASK_GUARD_SIZE 4096
-#define MAX_TASKS 16
+#define MAX_TASKS 32
 extern volatile uint32_t system_ticks;
 task_t tasks[MAX_TASKS];
 int current_task = -1;
@@ -130,6 +130,7 @@ int create_task(void (*entry_point)(), uint32_t priority) {
         num_tasks++;
     }
     tasks[slot].owned_frame_count = 0;
+    heap_arena_init(&tasks[slot].heap);
     uint32_t *stack = (uint32_t *)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
     *(--stack) = 0x0202;                /* eflags */
     *(--stack) = 0x10;                  /* cs (ring0) */
@@ -165,6 +166,7 @@ int create_user_task(void (*entry_point)(), uint32_t priority) {
         num_tasks++;
     }
     tasks[slot].owned_frame_count = 0;
+    heap_arena_init(&tasks[slot].heap);
 
     uint32_t user_stack_top = (uint32_t)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
     uint32_t kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_GUARD_SIZE + TASK_KSTACK_SIZE);

@@ -1,6 +1,7 @@
 #ifndef TASK_H
 #define TASK_H
 #include <stdint.h>
+#include "heap.h"
 #define TASK_MAX_OWNED_FRAMES 256
 typedef enum {
     TASK_READY,    
@@ -20,6 +21,7 @@ typedef struct {
     int is_user;
     uint32_t owned_frames[TASK_MAX_OWNED_FRAMES];
     int owned_frame_count;
+    heap_arena_t heap;
 } task_t;
 extern task_t tasks[];
 int create_task(void (*entry_point)(), uint32_t priority);
