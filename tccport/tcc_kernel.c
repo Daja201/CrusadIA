@@ -583,6 +583,9 @@ void cmd_cc(int argc, char **argv) {
  * exception ...") instead of hanging the whole machine. That run never
  * reaches "ALL TESTS PASSED" by design -- the crash *is* the pass. */
 static const char guidemo_src[] =
+"extern volatile int mouse_x, mouse_y;\n"
+"extern volatile unsigned char mouse_buttons;\n"
+"extern volatile unsigned int system_ticks;\n"
 "static void step(int n, const char* what) { klogf(\"[selftest] step %d: %s\\n\", n, what); }\n"
 "static void ok(int n) { klogf(\"[selftest] step %d ok\\n\", n); }\n"
 "\n"
@@ -601,7 +604,7 @@ static const char guidemo_src[] =
 "    ok(1);\n"
 "\n"
 "    step(2, \"screen size + raw pixel/line/rect drawing\");\n"
-"    int w = Wwidth, h = Hheight;\n"
+"    int w = Wwidth(), h = Hheight();\n"
 "    klogf(\"  screen is %dx%d\\n\", w, h);\n"
 "    vesa_clear(0x202030);\n"
 "    vesa_putpixel(10, 10, 0xFFFFFF);\n"
@@ -620,7 +623,7 @@ static const char guidemo_src[] =
 "    ok(3);\n"
 "\n"
 "    step(4, \"timing (system_ticks + os_sleep_ms)\");\n"
-"    uint32_t t0 = system_ticks;\n"
+"    unsigned int t0 = system_ticks;\n"
 "    os_sleep_ms(10);\n"
 "    klogf(\"  system_ticks %u -> %u\\n\", t0, system_ticks);\n"
 "    ok(4);\n"
