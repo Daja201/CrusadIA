@@ -629,9 +629,11 @@ void cmd_open(int argc, char** argv) {
         else if (strcmp(dot, ".txt") == 0) {
             cmd_read(argc, argv);
         } 
+        /*
         else if (strcmp(dot, ".cap") == 0) {
             cmd_cc(argc, argv);
         } 
+        */
         else if (strcmp(dot, ".bmp") == 0) {
             cmd_showimage(argc, argv);
         }

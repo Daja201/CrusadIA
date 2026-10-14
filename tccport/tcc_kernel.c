@@ -167,7 +167,7 @@ static const struct { const char *name; const void *addr; } guest_syms_ring3[] =
     SYM(vesa_draw_hor), SYM(vesa_draw_ver), SYM(vesa_draw_char),
     SYM(vesa_clear), SYM(vesa_swap),
     SYM(vesa_draw_button), SYM(vesa_buttons_clear), SYM(vesa_buttons_poll),
-    SYM(mouse_x), SYM(mouse_y), SYM(mouse_buttons), SYM(mouse_poll_click),
+    SYM(mouse_x), SYM(mouse_y), SYM(mouse_buttons), SYM(mouse_poll_click), SYM(mouse_draw),
     SYM(system_ticks), SYM_AS("os_sleep_ms", ring3_sleep_ms),
     SYM(printf), SYM(fprintf), SYM(sprintf), SYM(snprintf), SYM(vsnprintf), SYM(vfprintf),
     SYM(puts), SYM(putchar), SYM(fputs), SYM(fputc), SYM(fflush), SYM(fwrite),
@@ -674,7 +674,7 @@ static const char guidemo_src[] =
 "\n"
 "    step(9, \"clickable buttons (vesa_buttons_clear/vesa_draw_button/vesa_buttons_poll, one shot)\");\n"
 "    vesa_buttons_clear();\n"
-"    vesa_draw_button(40, 110, 140, 40, 0x3050A0, \"Count\", 0);\n"
+"    vesa_draw_button(800, 800, 40, 40, 0x3050A0, \"TUNG\", 67);\n"
 "    vesa_swap();\n"
 "    vesa_buttons_poll();\n"
 "    ok(9);\n"

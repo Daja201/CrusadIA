@@ -24,7 +24,10 @@ static uint32_t fb_width = 0;
 static uint32_t fb_height = 0;
 static uint32_t fb_bpp = 0;
 static uint32_t fb_pitch = 0;
-static uint32_t mouse_under[5][5];
+#define MOUSE_SIZE 5
+#define MOUSE_BORDER 1
+#define MOUSE_BOX (MOUSE_SIZE + 2 * MOUSE_BORDER)
+static uint32_t mouse_under[MOUSE_BOX][MOUSE_BOX];
 static int mouse_prev_x = -1, mouse_prev_y = -1;
 static int mouse_has_saved = 0;
 
@@ -250,15 +253,20 @@ static uint32_t vesa_get_backpixel(int x, int y) {
 void mouse_draw() {
     if (!vesa_ready) return;
     if (mouse_has_saved) {
-        for (int dy = 0; dy < 5; dy++)
-            for (int dx = 0; dx < 5; dx++)
-                vesa_putpixel(mouse_prev_x + dx, mouse_prev_y + dy, mouse_under[dy][dx]);
+        for (int dy = 0; dy < MOUSE_BOX; dy++)
+            for (int dx = 0; dx < MOUSE_BOX; dx++)
+                vesa_putpixel(mouse_prev_x - MOUSE_BORDER + dx, mouse_prev_y - MOUSE_BORDER + dy, mouse_under[dy][dx]);
     }
-    for (int dy = 0; dy < 5; dy++)
-        for (int dx = 0; dx < 5; dx++)
-            mouse_under[dy][dx] = vesa_get_backpixel(mouse_x + dx, mouse_y + dy);
+    for (int dy = 0; dy < MOUSE_BOX; dy++)
+        for (int dx = 0; dx < MOUSE_BOX; dx++)
+            mouse_under[dy][dx] = vesa_get_backpixel(mouse_x - MOUSE_BORDER + dx, mouse_y - MOUSE_BORDER + dy);
 
-    vesa_draw_rec(mouse_x, mouse_y, 5, 5, 0xFFFFFF);
+    uint32_t border_color = (mouse_buttons & 0x07) ? 0xFF0000 : 0xFFFFFF;
+    vesa_draw_rec(mouse_x - MOUSE_BORDER, mouse_y - MOUSE_BORDER, MOUSE_BOX, MOUSE_BORDER, border_color);
+    vesa_draw_rec(mouse_x - MOUSE_BORDER, mouse_y + MOUSE_SIZE, MOUSE_BOX, MOUSE_BORDER, border_color);
+    vesa_draw_rec(mouse_x - MOUSE_BORDER, mouse_y, MOUSE_BORDER, MOUSE_SIZE, border_color);
+    vesa_draw_rec(mouse_x + MOUSE_SIZE, mouse_y, MOUSE_BORDER, MOUSE_SIZE, border_color);
+    vesa_draw_rec(mouse_x, mouse_y, MOUSE_SIZE, MOUSE_SIZE, 0xFFFFFF);
 
     mouse_prev_x = mouse_x;
     mouse_prev_y = mouse_y;
@@ -343,6 +351,7 @@ void vesa_buttons_clear(void) {
 }
 
 void vesa_buttons_poll(void) {
+    if (g_button_count == 0) return;
     int mx, my;
     if (!mouse_poll_click(&mx, &my)) return;
     for (int i = 0; i < g_button_count; i++) {

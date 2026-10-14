@@ -57,6 +57,27 @@ int task_track_frames(int slot, const uint32_t* frames, int count) {
     return 0;
 }
 
+int task_map_user_page(int slot, uint32_t phys, uint32_t virt, uint32_t flags) {
+    if (slot < 0 || slot >= num_tasks) return -1;
+    uint32_t* dir = tasks[slot].page_directory;
+    if (!dir) return -1;
+    unmap_page_dir(dir, virt);
+    map_page_dir(dir, phys, virt, flags);
+    return 0;
+}
+
+uint32_t task_translate_user_ptr(int slot, uint32_t virt) {
+    if (slot < 0 || slot >= num_tasks) return 0;
+    uint32_t* dir = tasks[slot].page_directory;
+    if (!dir) return 0;
+    uint32_t pd_index = virt >> 22;
+    uint32_t pt_index = (virt >> 12) & 0x03FF;
+    if (!(dir[pd_index] & 0x1)) return 0;
+    uint32_t* table = (uint32_t*)(dir[pd_index] & ~0xFFFu);
+    if (!(table[pt_index] & 0x1)) return 0;
+    return (table[pt_index] & ~0xFFFu) | (virt & 0xFFFu);
+}
+
 void task_exit() {
     vfs_task_killed(current_task);
     free_task_address_space(&tasks[current_task]);
@@ -158,7 +179,7 @@ int create_task(void (*entry_point)(), uint32_t priority) {
     return slot;
 }
 
-int create_user_task(void (*entry_point)(), uint32_t priority) {
+int task_create_user(uint32_t priority) {
     int slot = find_dead_slot();
     if (slot < 0) {
         if (num_tasks >= MAX_TASKS) return -1;
@@ -166,10 +187,47 @@ int create_user_task(void (*entry_point)(), uint32_t priority) {
         num_tasks++;
     }
     tasks[slot].owned_frame_count = 0;
+    tasks[slot].state = TASK_DEAD;
+    tasks[slot].priority = priority;
+    tasks[slot].is_user = 1;
     heap_arena_init(&tasks[slot].heap);
+    tasks[slot].heap_virt_next = USER_HEAP_BASE;
+    tasks[slot].kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_GUARD_SIZE + TASK_KSTACK_SIZE);
 
-    uint32_t user_stack_top = (uint32_t)(task_stacks[slot] + TASK_GUARD_SIZE + TASK_STACK_SIZE);
-    uint32_t kernel_stack_top = (uint32_t)(task_kstacks[slot] + TASK_GUARD_SIZE + TASK_KSTACK_SIZE);
+    uint32_t* dir = clone_kernel_page_directory();
+    if (!dir) return -1;
+    tasks[slot].page_directory = dir;
+
+    uint32_t stack_bottom = USER_STACK_TOP - TASK_STACK_SIZE;
+    for (uint32_t va = stack_bottom; va < USER_STACK_TOP; va += PMM_BLOCK_SIZE) {
+        void* phys = pmm_alloc_block();
+        if (!phys) {
+            task_abort_user(slot);
+            return -1;
+        }
+        uint32_t frame = (uint32_t)phys;
+        if (task_track_frames(slot, &frame, 1) != 0) {
+            pmm_free_block(phys);
+            task_abort_user(slot);
+            return -1;
+        }
+        task_map_user_page(slot, frame, va, 0x07);
+    }
+
+    return slot;
+}
+
+void task_abort_user(int slot) {
+    if (slot < 0 || slot >= num_tasks) return;
+    free_task_address_space(&tasks[slot]);
+    tasks[slot].state = TASK_DEAD;
+}
+
+void task_start_user(int slot, void (*entry_point)()) {
+    if (slot < 0 || slot >= num_tasks) return;
+
+    uint32_t user_stack_top = USER_STACK_TOP;
+    uint32_t kernel_stack_top = tasks[slot].kernel_stack_top;
     uint32_t *kstack = (uint32_t *)kernel_stack_top;
 
     *(--kstack) = GDT_USER_DATA_SEL;
@@ -185,17 +243,13 @@ int create_user_task(void (*entry_point)(), uint32_t priority) {
     tasks[slot].esp = (uint32_t)kstack;
     tasks[slot].pid = next_pid++;
     tasks[slot].state = TASK_READY;
-    tasks[slot].priority = priority;
-    tasks[slot].is_user = 1;
-    tasks[slot].kernel_stack_top = kernel_stack_top;
 
-    uint32_t* dir = clone_kernel_page_directory();
-    if (!dir) {
-        tasks[slot].state = TASK_DEAD;
-        return -1;
-    }
-    unmap_page_dir(dir, (uint32_t)task_stacks[slot]);
-    unmap_page_dir(dir, (uint32_t)task_kstacks[slot]);
-    tasks[slot].page_directory = dir;
+    unmap_page_dir(tasks[slot].page_directory, (uint32_t)task_kstacks[slot]);
+}
+
+int create_user_task(void (*entry_point)(), uint32_t priority) {
+    int slot = task_create_user(priority);
+    if (slot < 0) return -1;
+    task_start_user(slot, entry_point);
     return slot;
 }

@@ -64,8 +64,12 @@ void usb_pci_init(void) {
 }
 
 void usb_poll_all(void) {
+    static volatile int in_poll = 0;
+    if (in_poll) return;
+    in_poll = 1;
     ohci_poll_interrupts();
     ehci_poll_interrupts();
     xhci_poll_interrupts();
     usb_poll();
+    in_poll = 0;
 }

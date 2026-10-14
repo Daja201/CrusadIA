@@ -31,7 +31,7 @@ void timer_init(uint32_t frequency) {
     outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
 }
 
-void system_main_task() {
+void kernel_task_main() {
     int last_sec = -1; 
     for (;;) {
         int needs_redraw = 0;
@@ -86,7 +86,7 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     tss_allow_io_range(0x70, 2);
     tss_allow_io_range(0x1F0, 8);
     tss_allow_io_range(0x170, 8);
-    create_task(system_main_task, 2);
+    create_task(kernel_task_main, 2);
     klog_status("MULTITASKING OK", 0x00FF00);
     ac97_init();
     klog_status("AC97 DRIVER OK", 0x00FF00);

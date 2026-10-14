@@ -84,11 +84,11 @@ void init_paging(uint32_t fb_phys_addr, uint32_t fb_width, uint32_t fb_height, u
     memset(page_directory, 0, 4096);
     for (uint32_t i = 0; i < 1048576; i++) {
         uint32_t addr = i * 4096;
-        map_page(addr, addr, 0x07);
+        map_page(addr, addr, 0x03);
     }
     uint32_t fb_size = fb_width * fb_height * (fb_bpp / 8);
     for (uint32_t i = 0; i < fb_size; i += 4096) {
-        map_page(fb_phys_addr + i, fb_phys_addr + i, 0x07);
+        map_page(fb_phys_addr + i, fb_phys_addr + i, 0x03);
     }
 
     map_page(0, 0, 0x02);
