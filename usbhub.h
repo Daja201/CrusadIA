@@ -1,5 +1,5 @@
-#ifndef USBHID_H
-#define USBHID_H
+#ifndef USBHUB_H
+#define USBHUB_H
 #include "usb.h"
 #include <stdint.h>
 
@@ -8,5 +8,7 @@ extern volatile uint8_t mouse_buttons;
 extern volatile int mouse_dirty;
 int mouse_poll_click(int* out_x, int* out_y);
 void usbhid_attach(usb_device_t* dev);
+void usbhub_attach(usb_device_t* dev);
+void usbhub_poll(void);
 
 #endif

@@ -4,6 +4,7 @@
 #include "terminal.h"
 #include "vesa.h"
 #include "vfs.h"
+#include "focus.h"
 
 #define SCRIBER_BUF_SIZE 16384
 #define SCRIBER_FNAME_SIZE 32
@@ -22,6 +23,7 @@ static int scriber_fname_len = 0;
 static int scriber_row_starts[SCRIBER_MAX_ROWS];
 static int scriber_row_count = 0;
 static int scriber_top_row = 0;
+static int scriber_focus_id = -1;
 
 void app(const char *app_name) {
     if (strcmp(app_name, "scriber") == 0) {
@@ -188,6 +190,7 @@ static void scriber_exit(void) {
     scriber_mode = SCRIBER_MODE_EDIT;
     scriber_top_row = 0;
     screen_appmode();
+    focus_pop();
     vesa_clear(0x000000);
     c_x = 0;
     c_y = 0;
@@ -211,12 +214,17 @@ void app_scriber(void) {
     scriber_fname_len = 0;
     scriber_mode = SCRIBER_MODE_EDIT;
     scriber_top_row = 0;
+    if (scriber_focus_id < 0) {
+        scriber_focus_id = focus_register(scriber_key, 0, "scriber");
+    }
     vesa_clear(0x000000);
     screen_appmode();
+    focus_push(scriber_focus_id);
     scriber_redraw();
 }
 
-void scriber_key(char c) {
+void scriber_key(char c, void *ctx) {
+    (void)ctx;
     if (scriber_mode == SCRIBER_MODE_MENU) {
         if (c == ARROW_ESC) {
             scriber_mode = SCRIBER_MODE_EDIT;

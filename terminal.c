@@ -4,6 +4,7 @@
 #include "string.h"
 #include "vesa.h"
 #include "app.h"
+#include "focus.h"
 #include "tccport/tcc_kernel.h"
 
 #define HISTORY_SIZE 16
@@ -142,8 +143,8 @@ void terminal_show_prompt(void) {
 
 void terminal_key(char c) {
 
-    if (screen_app_mode != 0) {
-        scriber_key(c);
+    if (focus_active()) {
+        focus_dispatch(c);
         return;
     }
 
