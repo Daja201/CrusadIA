@@ -2,6 +2,7 @@
 #include "usb.h"
 #include "klog.h"
 #include "string.h"
+#include "io.h"
 
 #define USB_HUB_REQ_GET_STATUS    0x00
 #define USB_HUB_REQ_CLEAR_FEATURE 0x01
@@ -10,6 +11,7 @@
 
 #define USB_PORT_FEAT_CONNECTION   0
 #define USB_PORT_FEAT_ENABLE       1
+#define USB_PORT_FEAT_HIGHSPEED    10
 #define USB_PORT_FEAT_RESET        4
 #define USB_PORT_FEAT_POWER        8
 #define USB_PORT_FEAT_LOWSPEED     9
@@ -63,6 +65,7 @@ void usbhub_attach(usb_device_t* dev) {
     for (int i = 0; i < num_ports; i++) {
         usbhub_set_feature(dev, i, USB_PORT_FEAT_POWER);
     }
+    pit_delay_ms((uint32_t)desc.bPwrOn2PwrGood * 2u + 100u);
 
     usbhub_ctx_t* hub = &g_hubs[g_hub_count++];
     hub->dev = dev;
@@ -83,10 +86,20 @@ void usbhub_poll(void) {
                 int connected = status & (1 << USB_PORT_FEAT_CONNECTION);
                 if (connected && !hub->port_present[p]) {
                     usbhub_set_feature(hub->dev, p, USB_PORT_FEAT_RESET);
-                    for (volatile int i = 0; i < 2000000; i++) { asm volatile("nop"); }
+                    uint32_t st2 = 0;
+                    for (int waited = 0; waited < 600; waited += 10) {
+                        pit_delay_ms(10);
+                        st2 = usbhub_get_port_status(hub->dev, p);
+                        if ((st2 >> 16) & (1u << USB_PORT_FEAT_RESET)) break;
+                    }
                     usbhub_clear_feature(hub->dev, p, USB_PORT_FEAT_C_RESET);
-                    uint32_t st2 = usbhub_get_port_status(hub->dev, p);
-                    int speed = (st2 & (1 << USB_PORT_FEAT_LOWSPEED)) ? 1 : 0;
+                    pit_delay_ms(30);
+                    st2 = usbhub_get_port_status(hub->dev, p);
+                    if (!(st2 & (1u << USB_PORT_FEAT_ENABLE))) {
+                        klogf_color("usbhub: port %d did not enable after reset (status=0x%x)\n", 0xFF0000, p, st2);
+                        continue;
+                    }
+                    int speed = (st2 & (1u << USB_PORT_FEAT_LOWSPEED)) ? 1 : ((st2 & (1u << USB_PORT_FEAT_HIGHSPEED)) ? 2 : 0);
                     hub->port_present[p] = 1;
                     usb_enumerate_device(hub->dev->hcd, hub->dev->address, p, speed);
                 } else if (!connected) {

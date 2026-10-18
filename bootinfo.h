@@ -8,5 +8,6 @@ extern uint32_t boot_fb_width;
 extern uint32_t boot_fb_height;
 extern uint32_t boot_fb_bpp;
 extern uint32_t boot_fb_pitch;
+extern uint32_t boot_ram_top_below_4g;
 void parse_multiboot(uint32_t mb_magic, uint32_t mb_info);
 #endif

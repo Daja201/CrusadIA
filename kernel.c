@@ -17,6 +17,7 @@
 #include "usb.h"
 #include "serial.h"
 #include "usbhid.h"
+#include "ps2.h"
 
 //initializes pci and searches for usb devices
 void usb_pci_init(void);
@@ -32,19 +33,30 @@ void timer_init(uint32_t frequency) {
 }
 
 void kernel_task_main() {
-    int last_sec = -1; 
+    int last_sec = -1;
+    static uint32_t kbd_redraw_count = 0;
+    static uint32_t mouse_redraw_count = 0;
     for (;;) {
         int needs_redraw = 0;
         extern volatile int usb_kbd_dirty;
-        usb_poll_all();  // updates state of usb devs
+        ps2_poll();
+        usb_poll_all();
         vesa_buttons_poll();
-        if (usb_kbd_dirty) { //check for queued keystrokles (usb)
+        if (usb_kbd_dirty) {
             usb_kbd_dirty = 0;
             needs_redraw = 1;
+            kbd_redraw_count++;
+            if (kbd_redraw_count <= 5) {
+                klogf_color("kernel: usb_kbd_dirty handled, redraw #%d\n", 0x00FF00, kbd_redraw_count);
+            }
         }
-        if (mouse_dirty != 0) { //check for queued mousestrokes
+        if (mouse_dirty != 0) {
             mouse_dirty  = 0;
             needs_redraw = 1;
+            mouse_redraw_count++;
+            if (mouse_redraw_count <= 5) {
+                klogf_color("kernel: mouse_dirty handled, redraw #%d\n", 0x00FF00, mouse_redraw_count);
+            }
         }
         int y, m, d, h, min, sec;
         rtc_get_datetime(&y, &m, &d, &h, &min, &sec); //just upadtes data from rtc
@@ -92,6 +104,8 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     klog_status("AC97 DRIVER OK", 0x00FF00);
     usb_pci_init();
     klog_status("USB OK", 0x00FF00);
+    ps2_init();
+    klog_status("PS/2 OK", 0x00FF00);
     char *argv[] = { (char*)"time", NULL };
     klog_color("boot time:", 0x00FF00);
     cmd_time(1, argv);

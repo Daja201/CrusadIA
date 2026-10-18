@@ -9,6 +9,7 @@ uint32_t boot_fb_width = 0;
 uint32_t boot_fb_height = 0;
 uint32_t boot_fb_bpp = 0;
 uint32_t boot_fb_pitch = 0;
+uint32_t boot_ram_top_below_4g = 0;
 
 void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
     if (mb_magic != 0x2BADB002) {
@@ -42,6 +43,9 @@ void parse_multiboot(uint32_t mb_magic, uint32_t mb_info) {
             if (type == 1) {
                 klogf("  Free RAM: base=0x%x, size=%d bytes\n", base_low, len_low);
                 pmm_init_region(base_low, len_low);
+                uint32_t region_end = base_low + len_low;
+                if (region_end < base_low) region_end = 0xFFFFFFFFu;
+                if (region_end > boot_ram_top_below_4g) boot_ram_top_below_4g = region_end;
             } else {
                 klogf("  Reserved: base=0x%x, size=%d bytes\n", base_low, len_low);
             }

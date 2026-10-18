@@ -4,6 +4,7 @@
 #include "pl2303.h"
 #include "klog.h"
 #include "string.h"
+#include "io.h"
 
 static usb_device_t g_devices[USB_MAX_DEVICES];
 static int g_next_address = 1;
@@ -77,39 +78,73 @@ int usb_bulk_read(usb_device_t* dev, void* buf, int len) {
 }
 
 static void usb_parse_config(usb_device_t* dev, uint8_t* cfgbuf, int total_len) {
-    uint8_t* p = cfgbuf;
     uint8_t* end = cfgbuf + total_len;
-    int found_iface = 0;
-    while (p < end) {
-        uint8_t len = p[0];
-        uint8_t type = p[1];
-        if (len == 0) break;
-        if (type == USB_DESC_INTERFACE && !found_iface) {
-            usb_interface_descriptor_t* id = (usb_interface_descriptor_t*)p;
-            dev->iface_class = id->bInterfaceClass;
-            dev->iface_subclass = id->bInterfaceSubClass;
-            dev->iface_protocol = id->bInterfaceProtocol;
-            found_iface = 1;
-        } else if (type == USB_DESC_ENDPOINT && found_iface) {
-            usb_endpoint_descriptor_t* ed = (usb_endpoint_descriptor_t*)p;
-            uint8_t ep_type = ed->bmAttributes & USB_EP_TYPE_MASK;
-            int is_in = (ed->bEndpointAddress & USB_EP_DIR_IN) != 0;
-            if (dev->ep_in_addr == 0 && ep_type == USB_EP_TYPE_INTERRUPT && is_in) {
-                dev->ep_in_addr = ed->bEndpointAddress;
-                dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
-                dev->ep_in_interval = ed->bInterval ? ed->bInterval : 10;
-            } else if (dev->ep_in_addr == 0 && ep_type == USB_EP_TYPE_BULK && is_in) {
-                dev->ep_in_addr = ed->bEndpointAddress;
-                dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
-                dev->ep_in_interval = 0;
+    int best_score = 0;
+    uint8_t* best = 0;
+
+    for (uint8_t* p = cfgbuf; p + 2 <= end && p[0] != 0; p += p[0]) {
+        if (p[1] != USB_DESC_INTERFACE) continue;
+        usb_interface_descriptor_t* id = (usb_interface_descriptor_t*)p;
+        if (id->bAlternateSetting != 0) continue;
+        int score = 1;
+        if (id->bInterfaceClass == USB_CLASS_HID) {
+            score = 2;
+            if (id->bInterfaceSubClass == 1 && (id->bInterfaceProtocol == 1 || id->bInterfaceProtocol == 2)) {
+                score = id->bInterfaceProtocol == 1 ? 4 : 3;
             }
-            if (dev->ep_out_addr == 0 && ep_type == USB_EP_TYPE_BULK && !is_in) {
-                dev->ep_out_addr = ed->bEndpointAddress;
-                dev->ep_out_maxpkt = ed->wMaxPacketSize & 0x7FF;
+        } else if (id->bInterfaceClass == USB_CLASS_HUB) {
+            score = 2;
+        }
+        if (score > best_score) {
+            best_score = score;
+            best = p;
+        }
+    }
+    if (!best) return;
+
+    usb_interface_descriptor_t* chosen = (usb_interface_descriptor_t*)best;
+    dev->iface_number = chosen->bInterfaceNumber;
+    dev->iface_class = chosen->bInterfaceClass;
+    dev->iface_subclass = chosen->bInterfaceSubClass;
+    dev->iface_protocol = chosen->bInterfaceProtocol;
+
+    for (uint8_t* p = best + best[0]; p + 2 <= end && p[0] != 0; p += p[0]) {
+        if (p[1] == USB_DESC_INTERFACE) break;
+        if (p[1] != USB_DESC_ENDPOINT) continue;
+        usb_endpoint_descriptor_t* ed = (usb_endpoint_descriptor_t*)p;
+        uint8_t ep_type = ed->bmAttributes & USB_EP_TYPE_MASK;
+        int is_in = (ed->bEndpointAddress & USB_EP_DIR_IN) != 0;
+        if (dev->ep_in_addr == 0 && ep_type == USB_EP_TYPE_INTERRUPT && is_in) {
+            dev->ep_in_addr = ed->bEndpointAddress;
+            dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
+            dev->ep_in_interval = ed->bInterval ? ed->bInterval : 10;
+        } else if (dev->ep_in_addr == 0 && ep_type == USB_EP_TYPE_BULK && is_in) {
+            dev->ep_in_addr = ed->bEndpointAddress;
+            dev->ep_in_maxpkt = ed->wMaxPacketSize & 0x7FF;
+            dev->ep_in_interval = 0;
+        }
+        if (dev->ep_out_addr == 0 && ep_type == USB_EP_TYPE_BULK && !is_in) {
+            dev->ep_out_addr = ed->bEndpointAddress;
+            dev->ep_out_maxpkt = ed->wMaxPacketSize & 0x7FF;
+        }
+    }
+}
+
+static int usb_pick_address(void) {
+    for (int tries = 0; tries < 127; tries++) {
+        int candidate = g_next_address;
+        g_next_address++;
+        if (g_next_address > 127) g_next_address = 1;
+        int taken = 0;
+        for (int i = 0; i < USB_MAX_DEVICES; i++) {
+            if (g_devices[i].in_use && g_devices[i].address == candidate) {
+                taken = 1;
+                break;
             }
         }
-        p += len;
+        if (!taken) return candidate;
     }
+    return -1;
 }
 
 void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed) {
@@ -122,7 +157,12 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
     dev->max_packet0 = 8;
 
     uint8_t tmp[8];
-    if (usb_get_descriptor(dev, USB_DESC_DEVICE, 0, tmp, 8) < 0) {
+    int got = -1;
+    for (int attempt = 0; attempt < 3 && got < 0; attempt++) {
+        if (attempt) pit_delay_ms(20);
+        got = usb_get_descriptor(dev, USB_DESC_DEVICE, 0, tmp, 8);
+    }
+    if (got < 0) {
         klog("usb: failed to read initial device descriptor\n");
         usb_free_device(dev);
         return;
@@ -130,12 +170,18 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
     usb_device_descriptor_t* dd8 = (usb_device_descriptor_t*)tmp;
     dev->max_packet0 = dd8->bMaxPacketSize0 ? dd8->bMaxPacketSize0 : 8;
 
-    int addr = g_next_address++;
+    int addr = usb_pick_address();
+    if (addr < 0) {
+        klog("usb: no free device addresses\n");
+        usb_free_device(dev);
+        return;
+    }
     if (usb_set_address(dev, addr) < 0) {
         klog("usb: set address failed\n");
         usb_free_device(dev);
         return;
     }
+    pit_delay_ms(10);
 
     if (usb_get_descriptor(dev, USB_DESC_DEVICE, 0, &dev->dev_desc, sizeof(usb_device_descriptor_t)) < 0) {
         klog("usb: failed to read full device descriptor\n");
@@ -167,8 +213,9 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
         return;
     }
 
-    klogf_color("usb: dev addr=%d vid=0x%x pid=0x%x class=0x%x sub=0x%x\n", 0x00FF00,
-        dev->address, dev->dev_desc.idVendor, dev->dev_desc.idProduct, dev->iface_class, dev->iface_subclass);
+    klogf_color("usb: dev addr=%d vid=0x%x pid=0x%x class=0x%x sub=0x%x proto=0x%x iface=%d ep_in=0x%x mps=%d speed=%d\n", 0x00FF00,
+        dev->address, dev->dev_desc.idVendor, dev->dev_desc.idProduct, dev->iface_class, dev->iface_subclass,
+        dev->iface_protocol, dev->iface_number, dev->ep_in_addr, dev->ep_in_maxpkt, dev->speed);
 
     if (pl2303_probe(dev)) {
         pl2303_attach(dev);

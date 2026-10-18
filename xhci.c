@@ -4,6 +4,11 @@
 #include "pci.h"
 #include "klog.h"
 #include "string.h"
+#include "paging.h"
+#include "io.h"
+
+#define XHCI_MMIO_MAP_SIZE 0x100000
+#define XHCI_MMIO_UC_FLAGS 0x1B
 
 #define XHCI_MAX_HC        4
 #define XHCI_MAX_SLOTS     32
@@ -76,6 +81,8 @@ typedef struct {
     int dci;
     int slot_id;
     xhci_trb_t* outstanding;
+    uint32_t completions;
+    uint32_t errors;
 } xhci_intr_ctx_t;
 
 static xhci_intr_ctx_t g_intr[XHCI_MAX_INTR];
@@ -88,8 +95,8 @@ static inline uint32_t rt_r(xhci_hc_t* hc, int reg) { return *(volatile uint32_t
 static inline void rt_w(xhci_hc_t* hc, int reg, uint32_t v) { *(volatile uint32_t*)(hc->rt + reg) = v; }
 static inline uint32_t cap_r(xhci_hc_t* hc, int reg) { return *(volatile uint32_t*)(hc->base + reg); }
 
-static void xhci_delay(int loops) {
-    for (volatile int i = 0; i < loops; i++) asm volatile("nop");
+static void xhci_delay(int us) {
+    pit_delay_us((uint32_t)us);
 }
 
 static xhci_trb_t* xhci_ring_push(xhci_trb_t* ring, int count, int* enq, int* cycle,
@@ -130,11 +137,22 @@ static int xhci_process_one_event(xhci_hc_t* hc, xhci_trb_t* out) {
         for (int i = 0; i < g_intr_count; i++) {
             xhci_intr_ctx_t* ic = &g_intr[i];
             if (ic->active && ic->outstanding == (xhci_trb_t*)(uintptr_t)ev->p_lo) {
-                int comp_ok = (((ev->status >> 24) & 0xFF) == XHCI_COMP_SUCCESS);
+                int comp_code = (int)((ev->status >> 24) & 0xFF);
+                int comp_ok = (comp_code == XHCI_COMP_SUCCESS || comp_code == 13);
                 int remaining = ev->status & 0xFFFFFF;
                 int actual = ic->maxpkt - remaining;
                 if (comp_ok && actual > 0) {
+                    ic->completions++;
+                    if (ic->completions <= 3) {
+                        klogf_color("xhci: intr completion dev=%d slot=%d bytes=%d b0=0x%x b1=0x%x b2=0x%x b3=0x%x\n", 0x00FF00,
+                            ic->dev->address, i, actual, ic->buf[0], ic->buf[1], ic->buf[2], ic->buf[3]);
+                    }
                     ic->callback(ic->dev, ic->buf, actual);
+                } else if (!comp_ok) {
+                    ic->errors++;
+                    if (ic->errors <= 3) {
+                        klogf_color("xhci: intr error dev=%d slot=%d comp_code=%d\n", 0xFF0000, ic->dev->address, i, comp_code);
+                    }
                 }
                 xhci_trb_t* trb = xhci_ring_push(ic->ring, XHCI_XFER_TRB_COUNT, &ic->enq, &ic->cycle,
                     (uint32_t)(uintptr_t)ic->buf, 0, ic->maxpkt,
@@ -285,7 +303,7 @@ static int xhci_evaluate_ep0_mps(xhci_hc_t* hc, xhci_dev_ctx_t* dc, int new_mps)
     uint32_t* ep0_ctx = (uint32_t*)((uint8_t*)dc->input_ctx + 2 * hc->ctx_size);
     ep0_ctx[1] = (ep0_ctx[1] & ~0xFFFF0000u) | ((uint32_t)new_mps << 16);
     return xhci_run_command(hc, (uint32_t)(uintptr_t)dc->input_ctx, 0, 0,
-        ((uint32_t)XHCI_TRB_TYPE_CONFIG_EP << XHCI_TRB_TYPE_SHIFT) | ((uint32_t)dc->slot_id << 24), 0) == 0
+        ((uint32_t)XHCI_TRB_TYPE_EVALUATE_CTX << XHCI_TRB_TYPE_SHIFT) | ((uint32_t)dc->slot_id << 24), 0) == 0
         ? 0 : -1;
 }
 
@@ -463,6 +481,8 @@ static int xhci_setup_interrupt_in(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t e
     ic->outstanding = trb;
     ic->active = 1;
     hc->db[dc->slot_id] = (uint32_t)dci;
+    klogf_color("xhci: interrupt-in registered dev=%d ep=0x%x maxpkt=%d dci=%d\n", 0x00FFFF,
+        dev->address, ep_addr, maxpkt, dci);
     g_intr_count++;
     return 0;
 }
@@ -471,12 +491,19 @@ void xhci_bios_handoff_pci(uint32_t bar0_phys) {
     volatile uint8_t* base = (volatile uint8_t*)(uintptr_t)(bar0_phys & ~0xF);
     uint32_t hccparams1 = *(volatile uint32_t*)(base + XHCI_CAP_HCCPARAMS1);
     uint32_t xecp = (hccparams1 >> 16) & 0xFFFF;
-    if (xecp == 0) return;
+    if (xecp == 0) {
+        klog_color("xhci: no extended capabilities list, skipping handoff\n", 0xFFFF00);
+        return;
+    }
     volatile uint32_t* cap = (volatile uint32_t*)(base + xecp * 4);
     int loops = 64;
     while (loops--) {
         uint32_t header = *cap;
         if ((header & 0xFF) == 1) {
+            volatile uint32_t* legctlsts = cap + 1;
+            klogf_color("xhci: legsup=0x%x legctlsts=0x%x (bios_owned=%d)\n", 0x00FFFF,
+                header, *legctlsts, (header >> 16) & 1);
+
             if (header & (1u << 16)) {
                 *cap = header | (1u << 24);
                 int w = 1000000;
@@ -485,7 +512,16 @@ void xhci_bios_handoff_pci(uint32_t bar0_phys) {
                     if ((v & (1u << 24)) && !(v & (1u << 16))) break;
                     asm volatile("pause");
                 }
+                header = *cap;
+                if (header & (1u << 16)) {
+                    klog_color("xhci: BIOS did not release ownership in time\n", 0xFF0000);
+                } else {
+                    klog_color("xhci: BIOS ownership released\n", 0x00FF00);
+                }
             }
+
+            *legctlsts = 0;
+            klogf_color("xhci: legctlsts after SMI disable=0x%x\n", 0x00FFFF, *legctlsts);
             return;
         }
         uint32_t next = (header >> 8) & 0xFF;
@@ -501,24 +537,33 @@ static void xhci_reset_and_route_port(xhci_hc_t* hc, int port) {
 
     status = (status & ~XHCI_PORTSC_RW1CS) | XHCI_PORTSC_PR;
     op_w(hc, reg, status);
-    xhci_delay(3000000);
 
-    int loops = 200000;
-    while (loops--) {
+    int reset_loops = XHCI_TIMEOUT_LOOPS;
+    while (reset_loops--) {
         status = op_r(hc, reg);
         if (status & XHCI_PORTSC_PRC) break;
+        if (!(status & XHCI_PORTSC_CCS)) return;
         asm volatile("pause");
     }
     op_w(hc, reg, (status & ~XHCI_PORTSC_RW1CS) | XHCI_PORTSC_PRC);
-    xhci_delay(200000);
 
-    status = op_r(hc, reg);
-    if (!(status & (XHCI_PORTSC_CCS))) return;
+    int enable_loops = XHCI_TIMEOUT_LOOPS;
+    while (enable_loops--) {
+        status = op_r(hc, reg);
+        if (status & XHCI_PORTSC_PED) break;
+        if (!(status & XHCI_PORTSC_CCS)) return;
+        asm volatile("pause");
+    }
+
+    if (!(status & XHCI_PORTSC_CCS)) return;
     if (!(status & XHCI_PORTSC_PED)) return;
+
+    xhci_delay(10000);
 
     int speed_psi = (int)((status >> XHCI_PORTSC_SPEED_SHIFT) & XHCI_PORTSC_SPEED_MASK);
     hc->pending_port = port + 1;
     hc->pending_speed_psi = speed_psi;
+    klogf_color("xhci: port %d reset ok speed_psi=%d\n", 0x00FFFF, port, speed_psi);
     usb_enumerate_device(&hc->hcd, 0, port, xhci_speed_psi_to_generic(speed_psi));
 }
 
@@ -527,6 +572,13 @@ usb_hcd_t* xhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint32_t 
     if (g_hc_count >= XHCI_MAX_HC) return 0;
     xhci_hc_t* hc = &g_hc[g_hc_count++];
     memset(hc, 0, sizeof(*hc));
+
+    uint32_t mmio_base = bar0_phys & ~0xFu;
+    for (uint32_t off = 0; off < XHCI_MMIO_MAP_SIZE; off += 4096) {
+        map_page(mmio_base + off, mmio_base + off, XHCI_MMIO_UC_FLAGS);
+    }
+
+    xhci_bios_handoff_pci(bar0_phys);
 
     hc->base = (volatile uint8_t*)(uintptr_t)(bar0_phys & ~0xF);
     uint8_t caplength = *(volatile uint8_t*)(hc->base + XHCI_CAP_CAPLENGTH);

@@ -31,11 +31,13 @@
 #define EHCI_STS_HCHALTED     (1 << 12)
 #define EHCI_STS_ASS          (1 << 15)
 #define EHCI_STS_PSS          (1 << 14)
+#define EHCI_STS_IAA           (1 << 5)
 
 #define EHCI_PORTSC_CCS        (1 << 0)
 #define EHCI_PORTSC_CSC        (1 << 1)
 #define EHCI_PORTSC_PED        (1 << 2)
 #define EHCI_PORTSC_PEDC       (1 << 3)
+#define EHCI_PORTSC_OCC        (1 << 5)
 #define EHCI_PORTSC_PR         (1 << 8)
 #define EHCI_PORTSC_LINESTATUS_MASK (0x3 << 10)
 #define EHCI_PORTSC_PP         (1 << 12)
@@ -85,6 +87,9 @@ typedef struct ehci_qh {
 #define EHCI_QH_EPCHAR_CONTROL_EP    (1 << 27)
 #define EHCI_QH_EPCHAR_NAK_RL_SHIFT  28
 
+#define EHCI_QH_CAPS_HUBADDR_SHIFT   16
+#define EHCI_QH_CAPS_HUBPORT_SHIFT   23
+#define EHCI_QH_CAPS_CMASK_SHIFT     8
 #define EHCI_QH_CAPS_MULT_SHIFT      30
 
 #define EHCI_LP_TYPE_QH  (1 << 1)

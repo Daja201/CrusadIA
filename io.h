@@ -44,4 +44,25 @@ static inline void outsw(uint16_t port, const void *addr, uint32_t count) {
                   "d" (port) : "memory");
 }
 
+static inline void pit_delay_us(uint32_t us) {
+    while (us > 0) {
+        uint32_t chunk = us > 50000 ? 50000 : us;
+        uint32_t count = (uint32_t)(((uint64_t)chunk * 1193182ull) / 1000000ull);
+        if (count < 1) count = 1;
+        if (count > 0xFFFF) count = 0xFFFF;
+        outb(0x61, (inb(0x61) & 0xFC) | 0x01);
+        outb(0x43, 0xB0);
+        outb(0x42, (uint8_t)(count & 0xFF));
+        outb(0x42, (uint8_t)((count >> 8) & 0xFF));
+        while (!(inb(0x61) & 0x20)) {
+            asm volatile("pause");
+        }
+        us -= chunk;
+    }
+}
+
+static inline void pit_delay_ms(uint32_t ms) {
+    pit_delay_us(ms * 1000u);
+}
+
 #endif

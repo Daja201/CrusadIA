@@ -58,9 +58,18 @@ static const char hid_map_upper[104] = {
 
 static uint8_t g_prev_keys[6];
 volatile int usb_kbd_dirty = 0;
+static uint32_t g_kbd_report_count = 0;
 
 static void usbhid_keyboard_report(usb_device_t* dev, uint8_t* report, int len) {
-    if (len < 8) return;
+    g_kbd_report_count++;
+    if (g_kbd_report_count <= 5) {
+        klogf_color("usbhid: kbd report #%d len=%d mod=0x%x k0=0x%x k1=0x%x\n", 0x00FF00,
+            g_kbd_report_count, len, report[0], report[2], report[3]);
+    }
+    if (len < 8) {
+        klog("usbhid: kbd report too short, dropped\n");
+        return;
+    }
     uint8_t modifiers = report[0];
     int shift = (modifiers & (HID_MOD_LSHIFT | HID_MOD_RSHIFT)) ? 1 : 0;
 
@@ -89,12 +98,7 @@ static void usbhid_keyboard_report(usb_device_t* dev, uint8_t* report, int len) 
     for (int i = 0; i < 6; i++) g_prev_keys[i] = report[2 + i];
 }
 
-static void usbhid_mouse_report(usb_device_t* dev, uint8_t* report, int len) {
-    if (len != 3 && len != 4) return;
-    uint8_t buttons = report[0];
-    int8_t dx = (int8_t)report[1];
-    int8_t dy = (int8_t)report[2];
-
+void mouse_apply_motion(int dx, int dy, uint8_t buttons) {
     mouse_x += dx;
     mouse_y += dy;
 
@@ -115,6 +119,21 @@ static void usbhid_mouse_report(usb_device_t* dev, uint8_t* report, int len) {
     }
     g_mouse_prev_buttons = buttons & 0x07;
     mouse_dirty = 1;
+}
+
+static uint32_t g_mouse_report_count = 0;
+
+static void usbhid_mouse_report(usb_device_t* dev, uint8_t* report, int len) {
+    g_mouse_report_count++;
+    if (g_mouse_report_count <= 5) {
+        klogf_color("usbhid: mouse report #%d len=%d b0=0x%x b1=0x%x b2=0x%x\n", 0x00FF00,
+            g_mouse_report_count, len, report[0], report[1], report[2]);
+    }
+    if (len != 3 && len != 4) {
+        klog("usbhid: mouse report unexpected length, dropped\n");
+        return;
+    }
+    mouse_apply_motion((int8_t)report[1], (int8_t)report[2], report[0]);
 }
 
 static void usbhid_raw_report(usb_device_t* dev, uint8_t* report, int len) {
@@ -170,13 +189,13 @@ int usbhid_raw_slot_report(int index, uint8_t* out_buf, int max_len, uint32_t* o
 
 void usbhid_attach(usb_device_t* dev) {
     if (dev->ep_in_addr == 0) {
-        klog("usbhid: no interrupt-in endpoint found\n");
+        klogf_color("usbhid: dev %d has no interrupt-in endpoint\n", 0xFF0000, dev->address);
         return;
     }
 
     if (dev->iface_protocol == HID_PROTO_KEYBOARD || dev->iface_protocol == HID_PROTO_MOUSE) {
-        usb_control_transfer(dev, 0x21, USB_REQ_SET_PROTOCOL, 0, 0, 0, 0);
-        usb_control_transfer(dev, 0x21, USB_REQ_SET_IDLE, 0, 0, 0, 0);
+        usb_control_transfer(dev, 0x21, USB_REQ_SET_PROTOCOL, 0, dev->iface_number, 0, 0);
+        usb_control_transfer(dev, 0x21, USB_REQ_SET_IDLE, 0, dev->iface_number, 0, 0);
 
         if (dev->iface_protocol == HID_PROTO_KEYBOARD) {
             for (int i = 0; i < 6; i++) g_prev_keys[i] = 0;
@@ -190,7 +209,7 @@ void usbhid_attach(usb_device_t* dev) {
         }
     }
 
-    usb_control_transfer(dev, 0x21, USB_REQ_SET_IDLE, 0, 0, 0, 0);
+    usb_control_transfer(dev, 0x21, USB_REQ_SET_IDLE, 0, dev->iface_number, 0, 0);
 
     for (int i = 0; i < HID_RAW_MAX_DEVICES; i++) {
         if (!g_raw_slots[i].in_use) {

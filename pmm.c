@@ -3,6 +3,7 @@
 
 static uint32_t pmm_bitmap[PMM_MAX_BLOCKS / 32];
 static uint32_t pmm_used_blocks = 0;
+static uint32_t pmm_next_hint = 0;
 
 static inline void bitmap_set(int bit) {
     pmm_bitmap[bit / 32] |= (1 << (bit % 32));
@@ -55,14 +56,20 @@ uint32_t pmm_count_mem() {
 }
 
 void* pmm_alloc_block() {
-    for (uint32_t i = 0; i < (PMM_MAX_BLOCKS / 32); i++) {
-        if (pmm_bitmap[i] != 0xFFFFFFFF) { 
-            for (int j = 0; j < 32; j++) { 
-                int bit = i * 32 + j;
-                if (!bitmap_test(bit)) {
-                    bitmap_set(bit);
-                    pmm_used_blocks++;
-                    return (void*)(bit * PMM_BLOCK_SIZE);
+    uint32_t start_word = pmm_next_hint / 32;
+    for (uint32_t pass = 0; pass < 2; pass++) {
+        uint32_t begin = (pass == 0) ? start_word : 0;
+        uint32_t end = (pass == 0) ? (PMM_MAX_BLOCKS / 32) : start_word;
+        for (uint32_t i = begin; i < end; i++) {
+            if (pmm_bitmap[i] != 0xFFFFFFFF) {
+                for (int j = 0; j < 32; j++) {
+                    int bit = i * 32 + j;
+                    if (!bitmap_test(bit)) {
+                        bitmap_set(bit);
+                        pmm_used_blocks++;
+                        pmm_next_hint = (uint32_t)bit;
+                        return (void*)(bit * PMM_BLOCK_SIZE);
+                    }
                 }
             }
         }
@@ -76,4 +83,5 @@ void pmm_free_block(void* addr) {
     if (!bitmap_test(block)) return;
     bitmap_clear(block);
     if (pmm_used_blocks > 0) pmm_used_blocks--;
+    if (block < pmm_next_hint) pmm_next_hint = block;
 }

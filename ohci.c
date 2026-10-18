@@ -3,6 +3,11 @@
 #include "pmm.h"
 #include "klog.h"
 #include "string.h"
+#include "paging.h"
+#include "io.h"
+
+#define OHCI_MMIO_MAP_SIZE 0x1000
+#define OHCI_MMIO_UC_FLAGS 0x1B
 
 #define OHCI_MAX_HC 4
 #define OHCI_TIMEOUT_LOOPS 2000000
@@ -13,6 +18,8 @@ typedef struct {
     ohci_ed_t* ctrl_ed_pool[USB_MAX_DEVICES];
     ohci_ed_t* intr_ed_pool[16];
     int intr_ed_count;
+    uint8_t port_present[USB_MAX_HUB_PORTS];
+    int n_ports;
     usb_hcd_t hcd;
 } ohci_hc_t;
 
@@ -169,6 +176,8 @@ static int ohci_bulk_transfer(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t ep_add
     return len;
 }
 
+static void ohci_poll_ports(ohci_hc_t* hc);
+
 typedef struct {
     usb_device_t* dev;
     void (*callback)(usb_device_t*, uint8_t*, int);
@@ -176,6 +185,8 @@ typedef struct {
     int maxpkt;
     ohci_ed_t* ed;
     ohci_td_t* td;
+    uint32_t completions;
+    uint32_t errors;
 } ohci_intr_ctx_t;
 
 static ohci_intr_ctx_t g_intr_ctx[16];
@@ -226,10 +237,17 @@ static int ohci_setup_interrupt_in(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t e
     ctx->maxpkt = maxpkt;
     ctx->ed = ed;
     ctx->td = td;
+    ctx->completions = 0;
+    ctx->errors = 0;
+    klogf_color("ohci: interrupt-in registered dev=%d ep=0x%x maxpkt=%d\n", 0x00FFFF,
+        dev->address, ep_addr, maxpkt);
     return 0;
 }
 
 void ohci_poll_interrupts(void) {
+    for (int h = 0; h < g_hc_count; h++) {
+        if (g_hc[h].n_ports) ohci_poll_ports(&g_hc[h]);
+    }
     for (int i = 0; i < g_intr_ctx_count; i++) {
         ohci_intr_ctx_t* ctx = &g_intr_ctx[i];
         if (!ctx->dev) continue;
@@ -241,7 +259,17 @@ void ohci_poll_interrupts(void) {
                 actual = ctx->maxpkt - ((ctx->td->buffer_end - ctx->td->cbp) + 1);
             }
             if (cc == 0 || cc == 15) {
+                ctx->completions++;
+                if (ctx->completions <= 3) {
+                    klogf_color("ohci: intr completion dev=%d slot=%d bytes=%d b0=0x%x b1=0x%x b2=0x%x b3=0x%x\n", 0x00FF00,
+                        ctx->dev->address, i, actual, ctx->buf[0], ctx->buf[1], ctx->buf[2], ctx->buf[3]);
+                }
                 ctx->callback(ctx->dev, ctx->buf, actual);
+            } else {
+                ctx->errors++;
+                if (ctx->errors <= 3) {
+                    klogf_color("ohci: intr error dev=%d slot=%d cc=%d\n", 0xFF0000, ctx->dev->address, i, cc);
+                }
             }
 
             ctx->ed->control |= OHCI_ED_SKIP;
@@ -261,10 +289,8 @@ void ohci_poll_interrupts(void) {
     }
 }
 
-static void ohci_delay(int loops) {
-    for (volatile int i = 0; i < loops; i++) {
-        asm volatile("nop");
-    }
+static void ohci_delay(int us) {
+    pit_delay_us((uint32_t)us);
 }
 
 static void ohci_reset_port(ohci_hc_t* hc, int port) {
@@ -275,21 +301,75 @@ static void ohci_reset_port(ohci_hc_t* hc, int port) {
         asm volatile("pause");
     }
     ohci_write(hc, OHCI_REG_RHPORTSTATUS + port, OHCI_RHPS_PRSC);
+    ohci_delay(20000);
+}
+
+static void ohci_enumerate_port(ohci_hc_t* hc, int port, int potpgt_ms) {
+    ohci_reset_port(hc, port);
+    ohci_delay(potpgt_ms * 1000);
+    uint32_t status = ohci_read(hc, OHCI_REG_RHPORTSTATUS + port);
+    int speed = (status & OHCI_RHPS_LSDA) ? 1 : 0;
+    if (status & OHCI_RHPS_PES) {
+        hc->port_present[port] = 1;
+        klogf_color("ohci: port %d device connected, %s speed\n", 0x00FFFF, port, speed ? "low" : "full");
+        usb_enumerate_device(&hc->hcd, 0, port, speed);
+    } else {
+        klogf_color("ohci: port %d did not enable after reset (status=0x%x)\n", 0xFF0000, port, status);
+    }
 }
 
 static void ohci_probe_root_ports(ohci_hc_t* hc) {
     uint32_t desc_a = ohci_read(hc, OHCI_REG_RHDESCA);
     int num_ports = desc_a & 0xFF;
-    for (int port = 0; port < num_ports && port < USB_MAX_HUB_PORTS; port++) {
+    int potpgt_ms = (int)((desc_a >> 24) & 0xFF) * 2;
+    if (potpgt_ms < 20) potpgt_ms = 20;
+    if (num_ports > USB_MAX_HUB_PORTS) num_ports = USB_MAX_HUB_PORTS;
+    hc->n_ports = num_ports;
+    for (int port = 0; port < num_ports; port++) {
+        ohci_write(hc, OHCI_REG_RHPORTSTATUS + port, OHCI_RHPS_PPS);
+    }
+    ohci_delay(potpgt_ms * 1000);
+    for (int port = 0; port < num_ports; port++) {
         uint32_t status = ohci_read(hc, OHCI_REG_RHPORTSTATUS + port);
         if (status & OHCI_RHPS_CCS) {
-            ohci_reset_port(hc, port);
-            ohci_delay(500000);
-            status = ohci_read(hc, OHCI_REG_RHPORTSTATUS + port);
-            int speed = (status & OHCI_RHPS_LSDA) ? 1 : 0;
-            if (status & OHCI_RHPS_PES) {
-                usb_enumerate_device(&hc->hcd, 0, port, speed);
-            }
+            ohci_delay(100000);
+            ohci_write(hc, OHCI_REG_RHPORTSTATUS + port, OHCI_RHPS_CSC);
+            ohci_enumerate_port(hc, port, potpgt_ms);
+        }
+    }
+}
+
+static void ohci_remove_port_devices(ohci_hc_t* hc, int port) {
+    int index = 0;
+    for (;;) {
+        usb_device_t* d = usb_get_device(index);
+        if (!d) break;
+        if (d->hcd == &hc->hcd && d->hub_addr == 0 && d->hub_port == port) {
+            usb_free_device(d);
+        } else {
+            index++;
+        }
+    }
+}
+
+static void ohci_poll_ports(ohci_hc_t* hc) {
+    uint32_t desc_a = ohci_read(hc, OHCI_REG_RHDESCA);
+    int potpgt_ms = (int)((desc_a >> 24) & 0xFF) * 2;
+    if (potpgt_ms < 20) potpgt_ms = 20;
+    for (int port = 0; port < hc->n_ports; port++) {
+        uint32_t status = ohci_read(hc, OHCI_REG_RHPORTSTATUS + port);
+        if (!(status & OHCI_RHPS_CSC)) continue;
+        ohci_write(hc, OHCI_REG_RHPORTSTATUS + port, OHCI_RHPS_CSC);
+        if (hc->port_present[port]) {
+            hc->port_present[port] = 0;
+            ohci_remove_port_devices(hc, port);
+            klogf_color("ohci: port %d device removed\n", 0xFFFF00, port);
+        }
+        ohci_delay(100000);
+        status = ohci_read(hc, OHCI_REG_RHPORTSTATUS + port);
+        if (status & OHCI_RHPS_CCS) {
+            ohci_write(hc, OHCI_REG_RHPORTSTATUS + port, OHCI_RHPS_CSC);
+            ohci_enumerate_port(hc, port, potpgt_ms);
         }
     }
 }
@@ -310,6 +390,10 @@ usb_hcd_t* ohci_probe_and_init(uint32_t bar0_phys) {
     if (g_hc_count >= OHCI_MAX_HC) return 0;
     ohci_hc_t* hc = &g_hc[g_hc_count++];
     memset(hc, 0, sizeof(ohci_hc_t));
+    uint32_t mmio_base = bar0_phys & ~0xFu;
+    for (uint32_t off = 0; off < OHCI_MMIO_MAP_SIZE; off += 4096) {
+        map_page(mmio_base + off, mmio_base + off, OHCI_MMIO_UC_FLAGS);
+    }
     hc->regs = (volatile uint32_t*)(uintptr_t)(bar0_phys & ~0xF);
 
     uint32_t control = ohci_read(hc, OHCI_REG_CONTROL);
@@ -322,7 +406,7 @@ usb_hcd_t* ohci_probe_and_init(uint32_t bar0_phys) {
     }
 
     ohci_write(hc, OHCI_REG_CONTROL, OHCI_CTRL_HCFS_RESET);
-    ohci_delay(2000000);
+    ohci_delay(50000);
 
     hc->hcca = (ohci_hcca_t*)pmm_alloc_block();
     memset(hc->hcca, 0, sizeof(ohci_hcca_t));
@@ -340,12 +424,13 @@ usb_hcd_t* ohci_probe_and_init(uint32_t bar0_phys) {
     ohci_write(hc, OHCI_REG_PERIODICSTART, (fi * 9) / 10);
 
     ohci_write(hc, OHCI_REG_CONTROL, OHCI_CTRL_HCFS_OPERATIONAL | (0x3 & OHCI_CTRL_CBSR_MASK));
-    ohci_delay(1000000);
+    ohci_delay(20000);
 
     uint32_t desc_a = ohci_read(hc, OHCI_REG_RHDESCA);
+    int potpgt_ms = (int)((desc_a >> 24) & 0xFF) * 2;
+    if (potpgt_ms < 20) potpgt_ms = 20;
     ohci_write(hc, OHCI_REG_RHSTATUS, (1 << 16));
-    ohci_delay(2000000);
-    (void)desc_a;
+    ohci_delay(potpgt_ms * 1000);
 
     hc->hcd.control_transfer = ohci_do_control;
     hc->hcd.setup_interrupt_in = ohci_setup_interrupt_in;

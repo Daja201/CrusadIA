@@ -100,6 +100,7 @@ typedef struct usb_device {
     int hub_addr;
     int hub_port;
     usb_device_descriptor_t dev_desc;
+    uint8_t iface_number;
     uint8_t iface_class;
     uint8_t iface_subclass;
     uint8_t iface_protocol;
