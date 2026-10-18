@@ -34,8 +34,6 @@ void timer_init(uint32_t frequency) {
 
 void kernel_task_main() {
     int last_sec = -1;
-    static uint32_t kbd_redraw_count = 0;
-    static uint32_t mouse_redraw_count = 0;
     for (;;) {
         int needs_redraw = 0;
         extern volatile int usb_kbd_dirty;
@@ -45,18 +43,10 @@ void kernel_task_main() {
         if (usb_kbd_dirty) {
             usb_kbd_dirty = 0;
             needs_redraw = 1;
-            kbd_redraw_count++;
-            if (kbd_redraw_count <= 5) {
-                klogf_color("kernel: usb_kbd_dirty handled, redraw #%d\n", 0x00FF00, kbd_redraw_count);
-            }
         }
         if (mouse_dirty != 0) {
             mouse_dirty  = 0;
             needs_redraw = 1;
-            mouse_redraw_count++;
-            if (mouse_redraw_count <= 5) {
-                klogf_color("kernel: mouse_dirty handled, redraw #%d\n", 0x00FF00, mouse_redraw_count);
-            }
         }
         int y, m, d, h, min, sec;
         rtc_get_datetime(&y, &m, &d, &h, &min, &sec); //just upadtes data from rtc

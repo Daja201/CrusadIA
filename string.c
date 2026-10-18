@@ -61,18 +61,42 @@ size_t strlen(const char* str) {
 }
 
 //copies a specified number of bytes from a source to some place
+//uses the cpu string instruction instead of a byte-by-byte loop, since
+//a compiled loop costs several cycles per byte while rep movs is handled
+//by the cpu itself; this matters a lot for things like full framebuffer copies
 void *memcpy(void *dest, const void *src, size_t n) {
-    unsigned char *d = (unsigned char*)dest;
-    const unsigned char *s = (const unsigned char*)src;
-    while (n--) *d++ = *s++;
-    return dest;
+    void *ret = dest;
+    uint32_t words = n >> 2;
+    uint32_t bytes = n & 3;
+    asm volatile (
+        "rep movsl\n\t"
+        "mov %3, %%ecx\n\t"
+        "rep movsb"
+        : "+D"(dest), "+S"(src), "+c"(words)
+        : "r"(bytes)
+        : "memory"
+    );
+    (void)ret;
+    return ret;
 }
 
 // can write bytes of memory into virtual mem when pagings enabled
 void *memset(void *s, int c, size_t n) {
-    unsigned char *p = (unsigned char*)s;
-    while (n--) *p++ = (unsigned char)c;
-    return s;
+    void *ret = s;
+    uint32_t fill = (unsigned char)c;
+    fill |= fill << 8;
+    fill |= fill << 16;
+    uint32_t words = n >> 2;
+    uint32_t bytes = n & 3;
+    asm volatile (
+        "rep stosl\n\t"
+        "mov %2, %%ecx\n\t"
+        "rep stosb"
+        : "+D"(s), "+c"(words)
+        : "r"(bytes), "a"(fill)
+        : "memory"
+    );
+    return ret;
 }
 
 //returns difference between bytes

@@ -58,16 +58,21 @@ static const char hid_map_upper[104] = {
 
 static uint8_t g_prev_keys[6];
 volatile int usb_kbd_dirty = 0;
-static uint32_t g_kbd_report_count = 0;
+static usb_device_t* g_active_kbd_dev = 0;
+
+int usbhid_keyboard_active(void) {
+    return g_active_kbd_dev != 0;
+}
+
+void usbhid_notify_detach(usb_device_t* dev) {
+    if (dev == g_active_kbd_dev) {
+        g_active_kbd_dev = 0;
+    }
+}
 
 static void usbhid_keyboard_report(usb_device_t* dev, uint8_t* report, int len) {
-    g_kbd_report_count++;
-    if (g_kbd_report_count <= 5) {
-        klogf_color("usbhid: kbd report #%d len=%d mod=0x%x k0=0x%x k1=0x%x\n", 0x00FF00,
-            g_kbd_report_count, len, report[0], report[2], report[3]);
-    }
     if (len < 8) {
-        klog("usbhid: kbd report too short, dropped\n");
+        klogf_color("sysmsg: usb device error at addr %d data short kbd report\n", 0xFFFF00, dev->address);
         return;
     }
     uint8_t modifiers = report[0];
@@ -121,16 +126,9 @@ void mouse_apply_motion(int dx, int dy, uint8_t buttons) {
     mouse_dirty = 1;
 }
 
-static uint32_t g_mouse_report_count = 0;
-
 static void usbhid_mouse_report(usb_device_t* dev, uint8_t* report, int len) {
-    g_mouse_report_count++;
-    if (g_mouse_report_count <= 5) {
-        klogf_color("usbhid: mouse report #%d len=%d b0=0x%x b1=0x%x b2=0x%x\n", 0x00FF00,
-            g_mouse_report_count, len, report[0], report[1], report[2]);
-    }
     if (len != 3 && len != 4) {
-        klog("usbhid: mouse report unexpected length, dropped\n");
+        klogf_color("sysmsg: usb device error at addr %d data bad mouse report\n", 0xFFFF00, dev->address);
         return;
     }
     mouse_apply_motion((int8_t)report[1], (int8_t)report[2], report[0]);
@@ -189,7 +187,7 @@ int usbhid_raw_slot_report(int index, uint8_t* out_buf, int max_len, uint32_t* o
 
 void usbhid_attach(usb_device_t* dev) {
     if (dev->ep_in_addr == 0) {
-        klogf_color("usbhid: dev %d has no interrupt-in endpoint\n", 0xFF0000, dev->address);
+        klogf_color("sysmsg: usb device error at addr %d data no interrupt endpoint\n", 0xFFFF00, dev->address);
         return;
     }
 
@@ -200,11 +198,12 @@ void usbhid_attach(usb_device_t* dev) {
         if (dev->iface_protocol == HID_PROTO_KEYBOARD) {
             for (int i = 0; i < 6; i++) g_prev_keys[i] = 0;
             dev->hcd->setup_interrupt_in(dev->hcd, dev, dev->ep_in_addr, dev->ep_in_maxpkt, dev->ep_in_interval, usbhid_keyboard_report);
-            klog_status("USB KEYBOARD READY", 0x00FF00);
+            g_active_kbd_dev = dev;
+            klog_status("USB KEYBOARD CONNECTED", 0x00FF00);
             return;
         } else {
             dev->hcd->setup_interrupt_in(dev->hcd, dev, dev->ep_in_addr, dev->ep_in_maxpkt, dev->ep_in_interval, usbhid_mouse_report);
-            klog_status("USB MOUSE READY", 0x00FF00);
+            klog_status("USB MOUSE CONNECTED", 0x00FF00);
             return;
         }
     }
@@ -218,10 +217,10 @@ void usbhid_attach(usb_device_t* dev) {
             g_raw_slots[i].last_len = 0;
             g_raw_slots[i].update_count = 0;
             dev->hcd->setup_interrupt_in(dev->hcd, dev, dev->ep_in_addr, dev->ep_in_maxpkt, dev->ep_in_interval, usbhid_raw_report);
-            klog_status("USB HID DEVICE READY (raw mode)", 0x00FF00);
+            klog_status("USB HID DEVICE CONNECTED", 0x00FF00);
             return;
         }
     }
 
-    klog("usbhid: raw HID slot table full\n");
+    klogf_color("sysmsg: usb device error at addr %d data no free hid slot\n", 0xFFFF00, dev->address);
 }

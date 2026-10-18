@@ -25,17 +25,12 @@ static int usb_resolve_bar0(pci_device_t* dev, const char* what, uint32_t* out_a
 
     uint32_t relocated = 0;
     if (pci_relocate_bar64_below_4g(dev->bus, dev->device, dev->function, 0x10, &relocated) == 0) {
-        klogf_color("usb: %s at %d:%d.%d had a 64-bit BAR above 4GB, relocated to 0x%x\n",
-            0x00FF00, what, dev->bus, dev->device, dev->function, relocated);
         *out_addr32 = relocated;
         return 1;
     }
 
-    uint32_t hi = (uint32_t)(dev->bar0 >> 32);
-    uint32_t lo = (uint32_t)(dev->bar0 & 0xFFFFFFFFu);
-    klogf_color("usb: %s at %d:%d.%d has a 64-bit BAR above 4GB (hi=0x%x lo=0x%x) and could not be relocated below 4GB\n",
-        0xFF0000, what, dev->bus, dev->device, dev->function, hi, lo);
-    klog_color("usb: try disabling 'Above 4G Decoding' / 'Resizable BAR Support' in BIOS/UEFI for this controller\n", 0xFFFF00);
+    (void)what;
+    klog_color("sysmsg: usb device error data controller bar above 4GB\n", 0xFFFF00);
     return 0;
 }
 
@@ -55,7 +50,6 @@ void usb_pci_init(void) {
                 pci_config_write(dev.bus, dev.device, dev.function, 0x04, cmd);
                 bar0 &= ~0xFu;
                 ehci_bios_handoff_pci(dev.bus, dev.device, dev.function, bar0);
-                klogf_color("usb: found EHCI controller at %d:%d.%d bar0=0x%x\n", 0x00FF00, dev.bus, dev.device, dev.function, bar0);
                 ehci_probe_and_init(bar0, usb_release_port_noop);
             }
         } else if (progif == PCI_PROGIF_OHCI) {
@@ -69,7 +63,6 @@ void usb_pci_init(void) {
                 cmd |= 0x06;
                 pci_config_write(dev.bus, dev.device, dev.function, 0x04, cmd);
                 bar0 &= ~0xFu;
-                klogf_color("usb: found xHCI controller at %d:%d.%d bar0=0x%x\n", 0x00FF00, dev.bus, dev.device, dev.function, bar0);
                 xhci_probe_and_init(dev.bus, dev.device, dev.function, bar0);
             }
         } else if (progif == PCI_PROGIF_UHCI) {
@@ -88,7 +81,6 @@ void usb_pci_init(void) {
         cmd |= 0x06;
         pci_config_write(d->bus, d->device, d->function, 0x04, cmd);
         bar0 &= ~0xFu;
-        klogf_color("usb: found OHCI controller at %d:%d.%d bar0=0x%x\n", 0x00FF00, d->bus, d->device, d->function, bar0);
         ohci_probe_and_init(bar0);
     }
 
@@ -96,14 +88,13 @@ void usb_pci_init(void) {
         pci_device_t* d = &g_uhci_devices[i];
         uint32_t bar4 = pci_config_read(d->bus, d->device, d->function, 0x20);
         if (!(bar4 & 0x1)) {
-            klogf_color("usb: UHCI controller at %d:%d.%d has no I/O BAR\n", 0xFF0000, d->bus, d->device, d->function);
+            klog_color("sysmsg: usb device error data uhci controller has no io bar\n", 0xFFFF00);
             continue;
         }
         uint16_t io = (uint16_t)(bar4 & 0xFFFCu);
         uint32_t cmd = pci_config_read(d->bus, d->device, d->function, 0x04);
         cmd |= 0x05;
         pci_config_write(d->bus, d->device, d->function, 0x04, cmd);
-        klogf_color("usb: found UHCI controller at %d:%d.%d io=0x%x\n", 0x00FF00, d->bus, d->device, d->function, io);
         uhci_probe_and_init(d->bus, d->device, d->function, io);
     }
 }

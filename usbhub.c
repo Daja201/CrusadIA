@@ -55,7 +55,7 @@ void usbhub_attach(usb_device_t* dev) {
 
     usb_hub_descriptor_t desc;
     if (usb_control_transfer(dev, 0xA0, USB_HUB_REQ_GET_DESCRIPTOR, (USB_DESC_HUB << 8), 0, &desc, sizeof(desc)) < 0) {
-        klog("usbhub: failed to read hub descriptor\n");
+        klog_color("sysmsg: usb device error data hub descriptor read failed\n", 0xFFFF00);
         return;
     }
 
@@ -72,7 +72,8 @@ void usbhub_attach(usb_device_t* dev) {
     hub->num_ports = num_ports;
     memset(hub->port_present, 0, sizeof(hub->port_present));
 
-    klogf_color("usbhub: attached, %d ports\n", 0x00FF00, num_ports);
+    klog_status("USB HUB CONNECTED", 0x00FF00);
+    (void)num_ports;
 }
 
 void usbhub_poll(void) {
@@ -96,7 +97,7 @@ void usbhub_poll(void) {
                     pit_delay_ms(30);
                     st2 = usbhub_get_port_status(hub->dev, p);
                     if (!(st2 & (1u << USB_PORT_FEAT_ENABLE))) {
-                        klogf_color("usbhub: port %d did not enable after reset (status=0x%x)\n", 0xFF0000, p, st2);
+                        klogf_color("sysmsg: usb device error at addr %d data port %d did not enable\n", 0xFFFF00, hub->dev->address, p);
                         continue;
                     }
                     int speed = (st2 & (1u << USB_PORT_FEAT_LOWSPEED)) ? 1 : ((st2 & (1u << USB_PORT_FEAT_HIGHSPEED)) ? 2 : 0);

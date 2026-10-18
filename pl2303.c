@@ -103,7 +103,7 @@ void pl2303_attach(usb_device_t* dev) {
     if (!dev) return;
 
     if (!dev->ep_out_addr || !dev->ep_in_addr) {
-        klog_color("pl2303: adapter has no usable bulk endpoints, aborting attach\n", 0xFF0000);
+        klogf_color("sysmsg: usb device error at addr %d data no bulk endpoints\n", 0xFFFF00, dev->address);
         return;
     }
 
@@ -115,9 +115,7 @@ void pl2303_attach(usb_device_t* dev) {
 
     g_active = dev;
 
-    klogf_color("pl2303: %s attached (vid=0x%x pid=0x%x, ep_in=0x%x ep_out=0x%x), 9600 8N1\n",
-        0x00FF00, pl2303_name(dev), dev->dev_desc.idVendor, dev->dev_desc.idProduct,
-        dev->ep_in_addr, dev->ep_out_addr);
+    klog_status("USB SERIAL ADAPTER CONNECTED", 0x00FF00);
 }
 
 int pl2303_write(usb_device_t* dev, const uint8_t* data, int len) {

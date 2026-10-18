@@ -143,15 +143,11 @@ static int xhci_process_one_event(xhci_hc_t* hc, xhci_trb_t* out) {
                 int actual = ic->maxpkt - remaining;
                 if (comp_ok && actual > 0) {
                     ic->completions++;
-                    if (ic->completions <= 3) {
-                        klogf_color("xhci: intr completion dev=%d slot=%d bytes=%d b0=0x%x b1=0x%x b2=0x%x b3=0x%x\n", 0x00FF00,
-                            ic->dev->address, i, actual, ic->buf[0], ic->buf[1], ic->buf[2], ic->buf[3]);
-                    }
                     ic->callback(ic->dev, ic->buf, actual);
                 } else if (!comp_ok) {
                     ic->errors++;
                     if (ic->errors <= 3) {
-                        klogf_color("xhci: intr error dev=%d slot=%d comp_code=%d\n", 0xFF0000, ic->dev->address, i, comp_code);
+                        klogf_color("sysmsg: usb device error at addr %d data comp_code=%d\n", 0xFFFF00, ic->dev->address, comp_code);
                     }
                 }
                 xhci_trb_t* trb = xhci_ring_push(ic->ring, XHCI_XFER_TRB_COUNT, &ic->enq, &ic->cycle,
@@ -481,8 +477,6 @@ static int xhci_setup_interrupt_in(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t e
     ic->outstanding = trb;
     ic->active = 1;
     hc->db[dc->slot_id] = (uint32_t)dci;
-    klogf_color("xhci: interrupt-in registered dev=%d ep=0x%x maxpkt=%d dci=%d\n", 0x00FFFF,
-        dev->address, ep_addr, maxpkt, dci);
     g_intr_count++;
     return 0;
 }
@@ -492,7 +486,6 @@ void xhci_bios_handoff_pci(uint32_t bar0_phys) {
     uint32_t hccparams1 = *(volatile uint32_t*)(base + XHCI_CAP_HCCPARAMS1);
     uint32_t xecp = (hccparams1 >> 16) & 0xFFFF;
     if (xecp == 0) {
-        klog_color("xhci: no extended capabilities list, skipping handoff\n", 0xFFFF00);
         return;
     }
     volatile uint32_t* cap = (volatile uint32_t*)(base + xecp * 4);
@@ -501,8 +494,6 @@ void xhci_bios_handoff_pci(uint32_t bar0_phys) {
         uint32_t header = *cap;
         if ((header & 0xFF) == 1) {
             volatile uint32_t* legctlsts = cap + 1;
-            klogf_color("xhci: legsup=0x%x legctlsts=0x%x (bios_owned=%d)\n", 0x00FFFF,
-                header, *legctlsts, (header >> 16) & 1);
 
             if (header & (1u << 16)) {
                 *cap = header | (1u << 24);
@@ -514,14 +505,11 @@ void xhci_bios_handoff_pci(uint32_t bar0_phys) {
                 }
                 header = *cap;
                 if (header & (1u << 16)) {
-                    klog_color("xhci: BIOS did not release ownership in time\n", 0xFF0000);
-                } else {
-                    klog_color("xhci: BIOS ownership released\n", 0x00FF00);
+                    klog_color("sysmsg: usb device error data bios did not release ownership\n", 0xFFFF00);
                 }
             }
 
             *legctlsts = 0;
-            klogf_color("xhci: legctlsts after SMI disable=0x%x\n", 0x00FFFF, *legctlsts);
             return;
         }
         uint32_t next = (header >> 8) & 0xFF;
@@ -563,7 +551,6 @@ static void xhci_reset_and_route_port(xhci_hc_t* hc, int port) {
     int speed_psi = (int)((status >> XHCI_PORTSC_SPEED_SHIFT) & XHCI_PORTSC_SPEED_MASK);
     hc->pending_port = port + 1;
     hc->pending_speed_psi = speed_psi;
-    klogf_color("xhci: port %d reset ok speed_psi=%d\n", 0x00FFFF, port, speed_psi);
     usb_enumerate_device(&hc->hcd, 0, port, xhci_speed_psi_to_generic(speed_psi));
 }
 

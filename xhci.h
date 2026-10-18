@@ -44,7 +44,7 @@
 #define XHCI_PORTSC_CSC        (1u << 17)
 #define XHCI_PORTSC_PEC        (1u << 18)
 #define XHCI_PORTSC_PRC        (1u << 21)
-#define XHCI_PORTSC_RW1CS      (XHCI_PORTSC_CSC | XHCI_PORTSC_PEC | (1u<<19) | (1u<<20) | XHCI_PORTSC_PRC | (1u<<22) | (1u<<23))
+#define XHCI_PORTSC_RW1CS      (XHCI_PORTSC_PED | XHCI_PORTSC_CSC | XHCI_PORTSC_PEC | (1u<<19) | (1u<<20) | XHCI_PORTSC_PRC | (1u<<22) | (1u<<23))
 
 /* Runtime registers, relative to RTSOFF; interrupter 0 starts at +0x20 */
 #define XHCI_RT_IR0            0x20

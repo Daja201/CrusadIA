@@ -29,6 +29,7 @@ usb_device_t* usb_alloc_device(usb_hcd_t* hcd) {
 
 void usb_free_device(usb_device_t* dev) {
     if (!dev) return;
+    usbhid_notify_detach(dev);
     if (dev->hcd && dev->hcd->release_device) {
         dev->hcd->release_device(dev->hcd, dev);
     }
@@ -163,7 +164,7 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
         got = usb_get_descriptor(dev, USB_DESC_DEVICE, 0, tmp, 8);
     }
     if (got < 0) {
-        klog("usb: failed to read initial device descriptor\n");
+        klogf_color("sysmsg: usb device error at addr %d data descriptor read failed\n", 0xFFFF00, dev->address);
         usb_free_device(dev);
         return;
     }
@@ -172,26 +173,26 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
 
     int addr = usb_pick_address();
     if (addr < 0) {
-        klog("usb: no free device addresses\n");
+        klog_color("sysmsg: usb device error data no free addresses\n", 0xFFFF00);
         usb_free_device(dev);
         return;
     }
     if (usb_set_address(dev, addr) < 0) {
-        klog("usb: set address failed\n");
+        klogf_color("sysmsg: usb device error at addr %d data set address failed\n", 0xFFFF00, addr);
         usb_free_device(dev);
         return;
     }
     pit_delay_ms(10);
 
     if (usb_get_descriptor(dev, USB_DESC_DEVICE, 0, &dev->dev_desc, sizeof(usb_device_descriptor_t)) < 0) {
-        klog("usb: failed to read full device descriptor\n");
+        klogf_color("sysmsg: usb device error at addr %d data descriptor read failed\n", 0xFFFF00, dev->address);
         usb_free_device(dev);
         return;
     }
 
     usb_config_descriptor_t cfg9;
     if (usb_get_descriptor(dev, USB_DESC_CONFIGURATION, 0, &cfg9, sizeof(cfg9)) < 0) {
-        klog("usb: failed to read config header\n");
+        klogf_color("sysmsg: usb device error at addr %d data config read failed\n", 0xFFFF00, dev->address);
         usb_free_device(dev);
         return;
     }
@@ -200,7 +201,7 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
     if (total > 512) total = 512;
     uint8_t cfgbuf[512];
     if (usb_get_descriptor(dev, USB_DESC_CONFIGURATION, 0, cfgbuf, total) < 0) {
-        klog("usb: failed to read full config descriptor\n");
+        klogf_color("sysmsg: usb device error at addr %d data config read failed\n", 0xFFFF00, dev->address);
         usb_free_device(dev);
         return;
     }
@@ -208,14 +209,10 @@ void usb_enumerate_device(usb_hcd_t* hcd, int hub_addr, int hub_port, int speed)
     usb_parse_config(dev, cfgbuf, total);
 
     if (usb_set_configuration(dev, cfg9.bConfigurationValue) < 0) {
-        klog("usb: set configuration failed\n");
+        klogf_color("sysmsg: usb device error at addr %d data set configuration failed\n", 0xFFFF00, dev->address);
         usb_free_device(dev);
         return;
     }
-
-    klogf_color("usb: dev addr=%d vid=0x%x pid=0x%x class=0x%x sub=0x%x proto=0x%x iface=%d ep_in=0x%x mps=%d speed=%d\n", 0x00FF00,
-        dev->address, dev->dev_desc.idVendor, dev->dev_desc.idProduct, dev->iface_class, dev->iface_subclass,
-        dev->iface_protocol, dev->iface_number, dev->ep_in_addr, dev->ep_in_maxpkt, dev->speed);
 
     if (pl2303_probe(dev)) {
         pl2303_attach(dev);

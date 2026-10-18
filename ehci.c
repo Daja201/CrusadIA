@@ -171,7 +171,7 @@ static void ehci_init_qh(ehci_qh_t* qh, usb_device_t* dev, int ep, int mps, int 
 
 static int ehci_ensure_running(ehci_hc_t* hc) {
     if (!(ehci_op_read(hc, EHCI_OP_USBSTS) & EHCI_STS_HCHALTED)) return 0;
-    klog_color("ehci: controller halted, restarting\n", 0xFFFF00);
+    klog_color("sysmsg: usb device error data controller halted, restarting\n", 0xFFFF00);
     ehci_op_write(hc, EHCI_OP_USBSTS, EHCI_STS_ALL_W1C);
     ehci_op_write(hc, EHCI_OP_USBCMD, ehci_op_read(hc, EHCI_OP_USBCMD) | EHCI_CMD_RUN);
     uint32_t start = ehci_op_read(hc, EHCI_OP_FRINDEX);
@@ -198,7 +198,7 @@ static int ehci_async_enable(ehci_hc_t* hc) {
         asm volatile("pause");
     }
     if (!(ehci_op_read(hc, EHCI_OP_USBSTS) & EHCI_STS_ASS)) {
-        klog_color("ehci: async schedule never started (ASS never set)\n", 0xFF0000);
+        klog_color("sysmsg: usb device error data async schedule did not start\n", 0xFFFF00);
         return -1;
     }
     return 0;
@@ -222,7 +222,7 @@ static void ehci_unlink_qh(ehci_hc_t* hc, ehci_qh_t* qh) {
         asm volatile("pause");
     }
     if (!(ehci_op_read(hc, EHCI_OP_USBSTS) & EHCI_STS_IAA)) {
-        klog_color("ehci: async advance doorbell timed out\n", 0xFF0000);
+        klog_color("sysmsg: usb device error data doorbell timeout\n", 0xFFFF00);
     }
     ehci_op_write(hc, EHCI_OP_USBSTS, EHCI_STS_IAA);
 }
@@ -259,16 +259,8 @@ static int ehci_submit(ehci_hc_t* hc, ehci_qh_t* qh, ehci_qtd_t* last, uint32_t 
 }
 
 static void ehci_report_failure(ehci_hc_t* hc, usb_device_t* dev, int kind, int result, ehci_qh_t* qh, ehci_qtd_t* tds, int count) {
-    klogf_color("ehci: %s xfer failed r=%d dev=%d speed=%d mps=%d hub=%d/%d\n", 0xFF0000,
-        kind == 0 ? "control" : "bulk", result, dev->address, dev->speed, dev->max_packet0, dev->hub_addr, dev->hub_port);
-    klogf_color("ehci: qh char=0x%x caps=0x%x cur=0x%x next=0x%x token=0x%x\n", 0xFF0000,
-        qh->ep_char, qh->ep_caps, qh->current_qtd, qh->next_qtd, qh->token);
-    for (int i = 0; i < count; i++) {
-        klogf_color("ehci: qtd%d token=0x%x next=0x%x\n", 0xFF0000, i, tds[i].token, tds[i].next_qtd);
-    }
-    klogf_color("ehci: usbsts=0x%x usbcmd=0x%x frindex=0x%x\n", 0xFF0000,
-        ehci_op_read(hc, EHCI_OP_USBSTS), ehci_op_read(hc, EHCI_OP_USBCMD),
-        ehci_op_read(hc, EHCI_OP_FRINDEX));
+    (void)hc; (void)kind; (void)result; (void)qh; (void)tds; (void)count;
+    klogf_color("sysmsg: usb device error at addr %d data xfer failed\n", 0xFFFF00, dev->address);
 }
 
 static int ehci_do_control(usb_hcd_t* hcdp, usb_device_t* dev, usb_setup_pkt_t* setup, void* buf, int len, int dir_in) {
@@ -417,9 +409,7 @@ static int ehci_setup_interrupt_in(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t e
     }
     ehci_barrier();
 
-    klogf_color("ehci: interrupt-in registered dev=%d ep=0x%x maxpkt=%d chained_prev=0x%x\n", 0x00FFFF,
-        dev->address, ep_addr, maxpkt, prev_head);
-
+    (void)prev_head;
     ehci_op_write(hc, EHCI_OP_USBCMD, ehci_op_read(hc, EHCI_OP_USBCMD) | EHCI_CMD_PSE);
 
     ehci_intr_ctx_t* ctx = &g_intr_ctx[g_intr_ctx_count++];
@@ -462,12 +452,10 @@ static void ehci_poll_ports(ehci_hc_t* hc) {
         if (hc->port_present[port]) {
             hc->port_present[port] = 0;
             ehci_remove_port_devices(hc, port);
-            klogf_color("ehci: port %d device removed\n", 0xFFFF00, port);
         }
 
         if (status & EHCI_PORTSC_CCS) {
             ehci_delay(100000);
-            klogf_color("ehci: port %d connect detected\n", 0x00FFFF, port);
             ehci_reset_and_route_port(hc, port);
         }
     }
@@ -486,15 +474,11 @@ void ehci_poll_interrupts(void) {
             int actual = ctx->maxpkt - remaining;
             if (cc_ok && actual > 0) {
                 ctx->completions++;
-                if (ctx->completions <= 3) {
-                    klogf_color("ehci: intr completion dev=%d slot=%d bytes=%d b0=0x%x b1=0x%x b2=0x%x b3=0x%x\n", 0x00FF00,
-                        ctx->dev->address, i, actual, ctx->buf[0], ctx->buf[1], ctx->buf[2], ctx->buf[3]);
-                }
                 ctx->callback(ctx->dev, ctx->buf, actual);
             } else if (!cc_ok) {
                 ctx->errors++;
                 if (ctx->errors <= 3) {
-                    klogf_color("ehci: intr error dev=%d slot=%d token=0x%x\n", 0xFF0000, ctx->dev->address, i, tok);
+                    klogf_color("sysmsg: usb device error at addr %d data 0x%x\n", 0xFFFF00, ctx->dev->address, tok);
                 }
             }
             if (cc_ok) {
@@ -516,8 +500,7 @@ static void ehci_bios_handoff(uint8_t bus, uint8_t dev, uint8_t func, uint32_t h
         if ((cap & 0xFF) == 0x01) {
             uint32_t legsup = cap;
             uint32_t legctlsts = pci_config_read(bus, dev, func, eecp + 4);
-            klogf_color("ehci: legsup=0x%x legctlsts=0x%x (bios_owned=%d)\n", 0x00FFFF,
-                legsup, legctlsts, (legsup >> 16) & 1);
+            (void)legctlsts;
 
             if (legsup & (1u << 16)) {
                 pci_config_write(bus, dev, func, eecp, legsup | (1u << 24));
@@ -529,15 +512,11 @@ static void ehci_bios_handoff(uint8_t bus, uint8_t dev, uint8_t func, uint32_t h
                 }
                 legsup = pci_config_read(bus, dev, func, eecp);
                 if (legsup & (1u << 16)) {
-                    klog_color("ehci: BIOS did not release ownership in time\n", 0xFF0000);
-                } else {
-                    klog_color("ehci: BIOS ownership released\n", 0x00FF00);
+                    klog_color("sysmsg: usb device error data bios did not release ownership\n", 0xFFFF00);
                 }
             }
 
             pci_config_write(bus, dev, func, eecp + 4, 0);
-            legctlsts = pci_config_read(bus, dev, func, eecp + 4);
-            klogf_color("ehci: legctlsts after SMI disable=0x%x\n", 0x00FFFF, legctlsts);
             return;
         }
         eecp = (cap >> 8) & 0xFF;
@@ -551,7 +530,6 @@ static uint32_t ehci_portsc_safe(uint32_t status) {
 static void ehci_hand_to_companion(ehci_hc_t* hc, int port) {
     uint32_t status = ehci_portsc_safe(ehci_op_read(hc, EHCI_OP_PORTSC + port * 4));
     ehci_op_write(hc, EHCI_OP_PORTSC + port * 4, status | EHCI_PORTSC_PO);
-    klogf_color("ehci: port %d handed to companion controller\n", 0x00FFFF, port);
     if (hc->release_port_to_companion) {
         hc->release_port_to_companion(port);
     }
@@ -571,7 +549,6 @@ static void ehci_reset_and_route_port(ehci_hc_t* hc, int port) {
     status &= ~EHCI_PORTSC_PED;
     status |= EHCI_PORTSC_PR;
     ehci_op_write(hc, reg, status);
-    klogf_color("ehci: port %d asserting reset\n", 0x00FFFF, port);
     ehci_delay(60000);
 
     status = ehci_portsc_safe(ehci_op_read(hc, reg));
@@ -585,8 +562,6 @@ static void ehci_reset_and_route_port(ehci_hc_t* hc, int port) {
     ehci_delay(50000);
 
     status = ehci_op_read(hc, reg);
-    klogf_color("ehci: port %d portsc after reset=0x%x (ccs=%d ped=%d)\n", 0x00FFFF,
-        port, status, status & EHCI_PORTSC_CCS ? 1 : 0, status & EHCI_PORTSC_PED ? 1 : 0);
 
     if (!(status & EHCI_PORTSC_CCS)) return;
 

@@ -51,15 +51,41 @@ void vesa_init_from_params(uint32_t phys_addr, uint32_t width, uint32_t height, 
     vesa_ready = 1;
 }
 
-// 
+// moves overlapping memory regions (used for scrolling the framebuffer).
+// uses the cpu string instructions instead of a byte-by-byte C loop, since
+// this routine moves whole screen rows and a compiled loop is far too slow
+// for that on real hardware.
 static void *vesa_memmove(void *dst, const void *src, uint32_t n) {
     uint8_t *d = (uint8_t*)dst;
     const uint8_t *s = (const uint8_t*)src;
     if (d == s || n == 0) return dst;
+
     if (d < s) {
-        for (uint32_t i = 0; i < n; i++) d[i] = s[i];
+        void *dest = d;
+        const void *srcp = s;
+        uint32_t words = n >> 2;
+        uint32_t bytes = n & 3;
+        asm volatile (
+            "cld\n\t"
+            "rep movsl\n\t"
+            "mov %3, %%ecx\n\t"
+            "rep movsb"
+            : "+D"(dest), "+S"(srcp), "+c"(words)
+            : "r"(bytes)
+            : "memory"
+        );
     } else {
-        for (uint32_t i = n; i > 0; i--) d[i - 1] = s[i - 1];
+        uint8_t *dest = d + n - 1;
+        const uint8_t *srcp = s + n - 1;
+        uint32_t count = n;
+        asm volatile (
+            "std\n\t"
+            "rep movsb\n\t"
+            "cld"
+            : "+D"(dest), "+S"(srcp), "+c"(count)
+            :
+            : "memory"
+        );
     }
     return dst;
 }
@@ -141,11 +167,7 @@ void vesa_putpixel(int x, int y, uint32_t color) {
 //whole screen to color
 void vesa_clear(uint32_t color) {
     if (!vesa_ready) return;
-    for (uint32_t y = 0; y < fb_height; y++) {
-        for (uint32_t x = 0; x < fb_width; x++) {
-            vesa_putpixel(x, y, color);
-        }
-    }
+    vesa_draw_rec(0, 0, (int)fb_width, (int)fb_height, color);
     c_x = 0;
     c_y = 0;
 }
@@ -219,21 +241,54 @@ void vesa_print_string(const char *str) {
 }
 
 void vesa_draw_hor(int x, int y, int a, uint32_t col ) {
-    for(int b = 0; b < a; b ++) {
-        vesa_putpixel(x + b, y, col);
+    if (!vesa_ready || y < 0 || (uint32_t)y >= fb_height) return;
+    int x0 = x, x1 = x + a;
+    if (x0 < 0) x0 = 0;
+    if ((uint32_t)x1 > fb_width) x1 = (int)fb_width;
+    if (x1 <= x0) return;
+
+    if (fb_bpp == 32) {
+        uint32_t *p = (uint32_t*)(back + (uint32_t)y * fb_pitch + (uint32_t)x0 * 4);
+        for (int c = x0; c < x1; c++) *p++ = col;
+    } else {
+        for (int c = x0; c < x1; c++) vesa_putpixel(c, y, col);
     }
 }
 
 void vesa_draw_ver(int x, int y, int a, uint32_t col ) {
-    for(int b = 0; b < a; b ++) {
-        vesa_putpixel(x , y + b, col);
+    if (!vesa_ready || x < 0 || (uint32_t)x >= fb_width) return;
+    int y0 = y, y1 = y + a;
+    if (y0 < 0) y0 = 0;
+    if ((uint32_t)y1 > fb_height) y1 = (int)fb_height;
+
+    if (fb_bpp == 32) {
+        uint8_t *row = back + (uint32_t)y0 * fb_pitch + (uint32_t)x * 4;
+        for (int r = y0; r < y1; r++) {
+            *(uint32_t*)row = col;
+            row += fb_pitch;
+        }
+    } else {
+        for (int r = y0; r < y1; r++) vesa_putpixel(x, r, col);
     }
 }
 
 void vesa_draw_rec(int x, int y, int width, int height, uint32_t col ) {
-    for(int d = 0; d < height; d ++) {
-        for(int c = 0; c < width; c ++) {
-            vesa_putpixel(x + c, y + d, col);
+    if (!vesa_ready) return;
+    int x0 = x, y0 = y, x1 = x + width, y1 = y + height;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if ((uint32_t)x1 > fb_width) x1 = (int)fb_width;
+    if ((uint32_t)y1 > fb_height) y1 = (int)fb_height;
+    if (x1 <= x0 || y1 <= y0) return;
+
+    if (fb_bpp == 32) {
+        for (int r = y0; r < y1; r++) {
+            uint32_t *p = (uint32_t*)(back + (uint32_t)r * fb_pitch + (uint32_t)x0 * 4);
+            for (int c = x0; c < x1; c++) *p++ = col;
+        }
+    } else {
+        for (int r = y0; r < y1; r++) {
+            for (int c = x0; c < x1; c++) vesa_putpixel(c, r, col);
         }
     }
 }

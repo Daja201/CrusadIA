@@ -239,8 +239,6 @@ static int ohci_setup_interrupt_in(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t e
     ctx->td = td;
     ctx->completions = 0;
     ctx->errors = 0;
-    klogf_color("ohci: interrupt-in registered dev=%d ep=0x%x maxpkt=%d\n", 0x00FFFF,
-        dev->address, ep_addr, maxpkt);
     return 0;
 }
 
@@ -260,15 +258,11 @@ void ohci_poll_interrupts(void) {
             }
             if (cc == 0 || cc == 15) {
                 ctx->completions++;
-                if (ctx->completions <= 3) {
-                    klogf_color("ohci: intr completion dev=%d slot=%d bytes=%d b0=0x%x b1=0x%x b2=0x%x b3=0x%x\n", 0x00FF00,
-                        ctx->dev->address, i, actual, ctx->buf[0], ctx->buf[1], ctx->buf[2], ctx->buf[3]);
-                }
                 ctx->callback(ctx->dev, ctx->buf, actual);
             } else {
                 ctx->errors++;
                 if (ctx->errors <= 3) {
-                    klogf_color("ohci: intr error dev=%d slot=%d cc=%d\n", 0xFF0000, ctx->dev->address, i, cc);
+                    klogf_color("sysmsg: usb device error at addr %d data cc=%d\n", 0xFFFF00, ctx->dev->address, cc);
                 }
             }
 
@@ -311,10 +305,7 @@ static void ohci_enumerate_port(ohci_hc_t* hc, int port, int potpgt_ms) {
     int speed = (status & OHCI_RHPS_LSDA) ? 1 : 0;
     if (status & OHCI_RHPS_PES) {
         hc->port_present[port] = 1;
-        klogf_color("ohci: port %d device connected, %s speed\n", 0x00FFFF, port, speed ? "low" : "full");
         usb_enumerate_device(&hc->hcd, 0, port, speed);
-    } else {
-        klogf_color("ohci: port %d did not enable after reset (status=0x%x)\n", 0xFF0000, port, status);
     }
 }
 
@@ -363,7 +354,6 @@ static void ohci_poll_ports(ohci_hc_t* hc) {
         if (hc->port_present[port]) {
             hc->port_present[port] = 0;
             ohci_remove_port_devices(hc, port);
-            klogf_color("ohci: port %d device removed\n", 0xFFFF00, port);
         }
         ohci_delay(100000);
         status = ohci_read(hc, OHCI_REG_RHPORTSTATUS + port);

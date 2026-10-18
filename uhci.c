@@ -285,8 +285,7 @@ static int uhci_do_control(usb_hcd_t* hcdp, usb_device_t* dev, usb_setup_pkt_t* 
     int r = uhci_wait_chain(&a->qh_ctrl, a->td, n, status_idx, UHCI_CONTROL_TIMEOUT_MS, &completed, &actual);
 
     if (r != 0) {
-        klogf_color("uhci: control xfer failed r=%d dev=%d speed=%d mps=%d done=%d/%d td=0x%x\n", 0xFF0000,
-            r, dev->address, dev->speed, mps, completed, n, completed < n ? a->td[completed].ctrl : 0);
+        klogf_color("sysmsg: usb device error at addr %d data xfer failed\n", 0xFFFF00, dev->address);
     }
 
     uhci_finish(&a->qh_ctrl, a->td, n, r != 0);
@@ -412,8 +411,6 @@ static int uhci_setup_interrupt_in(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t e
     td->ctrl = ctx->ctrl;
     uhci_barrier();
 
-    klogf_color("uhci: interrupt-in registered dev=%d ep=0x%x maxpkt=%d speed=%d\n", 0x00FFFF,
-        dev->address, ep_addr, maxpkt, dev->speed);
     return 0;
 }
 
@@ -465,12 +462,10 @@ static void uhci_probe_port(uhci_hc_t* hc, int port) {
     uhci_port_write(hc, port, (uint16_t)((st & UHCI_PORT_KEEP) | UHCI_PORT_CSC | UHCI_PORT_PEDC));
 
     if (!enabled) {
-        klogf_color("uhci: port %d did not enable after reset (portsc=0x%x)\n", 0xFF0000, port, st);
         return;
     }
 
     int speed = (st & UHCI_PORT_LSDA) ? 1 : 0;
-    klogf_color("uhci: port %d device connected, %s speed\n", 0x00FFFF, port, speed ? "low" : "full");
     hc->port_present[port] = 1;
     pit_delay_ms(20);
     usb_enumerate_device(&hc->hcd, 0, port, speed);
@@ -505,7 +500,6 @@ static void uhci_poll_ports(uhci_hc_t* hc) {
         } else if (hc->port_present[port]) {
             hc->port_present[port] = 0;
             uhci_remove_port_devices(hc, port);
-            klogf_color("uhci: port %d device removed\n", 0xFFFF00, port);
         }
     }
 }
@@ -520,7 +514,7 @@ void uhci_poll_interrupts(void) {
         if (st & UHCI_TD_ERRORS) {
             ctx->errors++;
             if (ctx->errors <= 3) {
-                klogf_color("uhci: intr error dev=%d slot=%d ctrl=0x%x\n", 0xFF0000, ctx->dev->address, i, st);
+                klogf_color("sysmsg: usb device error at addr %d data 0x%x\n", 0xFFFF00, ctx->dev->address, st);
             }
             uhci_rearm(ctx);
             continue;
@@ -530,10 +524,6 @@ void uhci_poll_interrupts(void) {
         ctx->toggle ^= 1;
         if (actual > 0) {
             ctx->completions++;
-            if (ctx->completions <= 3) {
-                klogf_color("uhci: intr completion dev=%d slot=%d bytes=%d b0=0x%x b1=0x%x b2=0x%x b3=0x%x\n", 0x00FF00,
-                    ctx->dev->address, i, actual, ctx->buf[0], ctx->buf[1], ctx->buf[2], ctx->buf[3]);
-            }
             ctx->callback(ctx->dev, ctx->buf, actual);
         }
         uhci_rearm(ctx);
@@ -566,7 +556,7 @@ usb_hcd_t* uhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint16_t 
         pit_delay_ms(1);
     }
     if (!reset_done) {
-        klogf_color("uhci: controller at %d:%d.%d did not leave reset\n", 0xFF0000, bus, dev, func);
+        klog_color("sysmsg: usb device error data controller did not leave reset\n", 0xFFFF00);
         return 0;
     }
     outw((uint16_t)(io_base + UHCI_REG_INTR), 0);
@@ -580,7 +570,7 @@ usb_hcd_t* uhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint16_t 
         ports++;
     }
     if (ports == 0) {
-        klogf_color("uhci: controller at %d:%d.%d reports no ports\n", 0xFF0000, bus, dev, func);
+        klog_color("sysmsg: usb device error data controller reports no ports\n", 0xFFFF00);
         return 0;
     }
     hc->n_ports = ports;
@@ -588,7 +578,7 @@ usb_hcd_t* uhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint16_t 
     hc->frames = (volatile uint32_t*)pmm_alloc_block();
     hc->arena = (uhci_arena_t*)pmm_alloc_block();
     if (!hc->frames || !hc->arena) {
-        klog_color("uhci: out of memory for schedule\n", 0xFF0000);
+        klog_color("sysmsg: usb device error data out of memory for schedule\n", 0xFFFF00);
         return 0;
     }
     memset((void*)hc->frames, 0, 4096);
@@ -618,7 +608,7 @@ usb_hcd_t* uhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint16_t 
         pit_delay_ms(1);
     }
     if (!running) {
-        klogf_color("uhci: controller at %d:%d.%d did not start\n", 0xFF0000, bus, dev, func);
+        klog_color("sysmsg: usb device error data controller did not start\n", 0xFFFF00);
         return 0;
     }
 
@@ -632,7 +622,8 @@ usb_hcd_t* uhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint16_t 
     hc->hcd.priv = hc;
 
     g_hc_count++;
-    klogf_color("UHCI CONTROLLER STARTED (%d ports)\n", 0x00FF00, ports);
+    klog_status("USB UHCI CONTROLLER STARTED", 0x00FF00);
+    (void)ports;
 
     for (int port = 0; port < ports; port++) {
         uint16_t st = uhci_port_read(hc, port);

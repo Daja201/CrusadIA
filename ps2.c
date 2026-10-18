@@ -315,7 +315,7 @@ void ps2_poll(void) {
         if (st & PS2_ST_AUX) {
             if (g_mouse_ok) ps2_mouse_byte(b);
         } else {
-            if (g_kbd_ok) ps2_keyboard_byte(b);
+            if (g_kbd_ok && !usbhid_keyboard_active()) ps2_keyboard_byte(b);
         }
     }
 }
