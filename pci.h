@@ -20,6 +20,11 @@ typedef struct {
 #define PCI_PROGIF_EHCI      0x20
 #define PCI_PROGIF_XHCI      0x30
 
+#define PCI_CLASS_MASS_STORAGE 0x01
+#define PCI_SUBCLASS_IDE        0x01
+#define PCI_SUBCLASS_SATA       0x06
+#define PCI_PROGIF_AHCI          0x01
+
 uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 void pci_config_write(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 int pci_find_class(uint8_t class_code, uint8_t subclass, pci_device_t* out, int index);

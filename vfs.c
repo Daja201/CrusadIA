@@ -977,6 +977,11 @@ uint32_t vfs_drive_size_mb(int drive) {
     return g_drives[drive].total_sectors / 2048;
 }
 
+const char* vfs_drive_bus(int drive) {
+    if (drive < 0 || drive >= g_active_drives) return "ata";
+    return g_drives[drive].ata_base == SATA_DRIVE_MARKER ? "sata" : "ata";
+}
+
 int vfs_parse_drive(const char* s) {
     if (!s || !*s) return -1;
     if (s[0] == 'd' || s[0] == 'D') s++;

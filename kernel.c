@@ -18,6 +18,7 @@
 #include "serial.h"
 #include "usbhid.h"
 #include "ps2.h"
+#include "ahci.h"
 
 //initializes pci and searches for usb devices
 void usb_pci_init(void);
@@ -85,6 +86,8 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     logo();
     klog_status("PAGING OK", 0x00FF00);
     klogf_color("sysmsg: VESA OK %dx%dx%d\n", 0x00FF00, Wwidth(), Hheight(), boot_fb_bpp);
+    ahci_init();
+    klog_status("AHCI OK", 0x00FF00);
     drives();
     vfs_init();
     klog_status("FILESYSTEM OK", 0x00FF00);

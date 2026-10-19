@@ -1,3 +1,5 @@
 *.img
 *.img*.o
 .aider*
+os.iso
+*.iso

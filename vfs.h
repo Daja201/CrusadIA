@@ -60,6 +60,7 @@ void        vfs_task_killed(int task);
 
 int         vfs_drive_count(void);
 uint32_t    vfs_drive_size_mb(int drive);
+const char* vfs_drive_bus(int drive);
 int         vfs_parse_drive(const char* s);
 int         vfs_detect(int drive);
 const char* vfs_fs_name(int fs);

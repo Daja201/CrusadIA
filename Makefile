@@ -110,8 +110,11 @@ clean:
 
 run:
 	qemu-system-i386 -cdrom os.iso -boot d \
-		-drive file=disk.img,format=raw,bus=0,unit=0,media=disk \
-		-drive file=disk2.img,format=raw,bus=0,unit=1,media=disk \
+		-device ahci,id=ahci0 \
+		-drive file=disk.img,format=raw,if=none,id=drive0 \
+		-device ide-hd,drive=drive0,bus=ahci0.0 \
+		-drive file=disk2.img,format=raw,if=none,id=drive1 \
+		-device ide-hd,drive=drive1,bus=ahci0.1 \
 		$(QEMU_AUDIO) -device ac97,audiodev=snd0 \
 		-device pci-ohci,id=ohci \
 		-device usb-ehci,id=ehci \

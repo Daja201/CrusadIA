@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "string.h"
 #include "io.h"
+#include "ahci.h"
 
 #define ATA_PRIMARY 0x1F0
 #define ATA_SECONDARY 0x170
@@ -35,8 +36,6 @@ static uint32_t inode_table_blocks = 0;
 static uint32_t block_bitmap_sectors = 0;
 static uint32_t inode_bitmap_sectors = 0;
 static uint32_t block_bitmap_bytes = 0;
-static uint8_t block_bitmap_static[BLOCK_BITMAP_MAX_SIZE];
-uint8_t *block_bitmap = block_bitmap_static;
 int g_current_drive = 0;
 
 struct dirent {
@@ -44,22 +43,26 @@ struct dirent {
     char name[28];
 };
 
-static int get_block_bitmap_bit(uint32_t idx) {
-    if (idx >= g_superblock.total_blocks) return 1;
-    uint32_t byte_off = idx / 8;
-    return (block_bitmap[byte_off] >> (idx % 8)) & 1;
-}
-
 static void set_block_bitmap_bit(uint32_t idx) {
     if (idx >= g_superblock.total_blocks) return;
     uint32_t byte_off = idx / 8;
-    block_bitmap[byte_off] |= (1 << (idx % 8));
+    uint32_t sector = byte_off / SECTOR_SIZE;
+    uint32_t in_sector = byte_off % SECTOR_SIZE;
+    uint8_t sec[SECTOR_SIZE];
+    block_read(g_superblock.bitmap_start + sector, sec);
+    sec[in_sector] |= (1 << (idx % 8));
+    block_write(g_superblock.bitmap_start + sector, sec);
 }
 
 static void clear_block_bitmap_bit(uint32_t idx) {
     if (idx >= g_superblock.total_blocks) return;
     uint32_t byte_off = idx / 8;
-    block_bitmap[byte_off] &= ~(1 << (idx % 8));
+    uint32_t sector = byte_off / SECTOR_SIZE;
+    uint32_t in_sector = byte_off % SECTOR_SIZE;
+    uint8_t sec[SECTOR_SIZE];
+    block_read(g_superblock.bitmap_start + sector, sec);
+    sec[in_sector] &= ~(1 << (idx % 8));
+    block_write(g_superblock.bitmap_start + sector, sec);
 }
 
 int ata_wait_busy(uint16_t base) {
@@ -83,6 +86,12 @@ int ata_wait_drq(uint16_t base) {
 }
 
 void block_read(uint32_t lba, uint8_t* buf) {
+    if (current_ata_base == SATA_DRIVE_MARKER) {
+        if (ahci_read_sectors(current_is_slave, lba, 1, buf) != 0) {
+            memset(buf, 0, SECTOR_SIZE);
+        }
+        return;
+    }
     uint8_t drive_sel = (current_is_slave ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F);
     outb(current_ata_base + ATA_REG_DRIVE, drive_sel);
     for(int i = 0; i < 4; i++) inb(current_ata_base + ATA_REG_STATUS);
@@ -103,6 +112,10 @@ void block_read(uint32_t lba, uint8_t* buf) {
 }
 
 void block_write(uint32_t lba, const uint8_t* buf) {
+    if (current_ata_base == SATA_DRIVE_MARKER) {
+        ahci_write_sectors(current_is_slave, lba, 1, buf);
+        return;
+    }
     uint8_t drive_sel = (current_is_slave ? 0xF0 : 0xE0) | ((lba >> 24) & 0x0F);
     outb(current_ata_base + ATA_REG_DRIVE, drive_sel);
     for(int i = 0; i < 4; i++) inb(current_ata_base + ATA_REG_STATUS);
@@ -114,18 +127,6 @@ void block_write(uint32_t lba, const uint8_t* buf) {
     outb(current_ata_base + ATA_REG_CMD, ATA_CMD_WRITE);    
     if (ata_wait_drq(current_ata_base) < 0) return;
     outsw(current_ata_base + ATA_REG_DATA, buf, SECTOR_SIZE / 2);
-}
-
-static void flush_block_bitmap_sector(uint32_t idx) {
-    uint32_t sector = (idx / 8) / SECTOR_SIZE;
-    if (sector >= block_bitmap_sectors) return;
-    uint8_t tmp[SECTOR_SIZE];
-    uint32_t start = sector * SECTOR_SIZE;
-    uint32_t left = block_bitmap_bytes > start ? block_bitmap_bytes - start : 0;
-    uint32_t n = left > SECTOR_SIZE ? SECTOR_SIZE : left;
-    memset(tmp, 0, SECTOR_SIZE);
-    if (n) memcpy(tmp, block_bitmap + start, n);
-    block_write(g_superblock.bitmap_start + sector, tmp);
 }
 
 static void flush_inode_bitmap_sector(uint32_t idx) {
@@ -140,11 +141,21 @@ int alloc_block() {
     if (g_superblock.magic == FS_MAGIC && g_superblock.data_start > 1) {
         start_idx = g_superblock.data_start;
     }
-    for (uint32_t i = start_idx; i < g_superblock.total_blocks; i++) {
-        if (!get_block_bitmap_bit(i)) {
-            set_block_bitmap_bit(i);
-            flush_block_bitmap_sector(i);
-            return (int)i;
+    uint32_t start_sector = (start_idx / 8) / SECTOR_SIZE;
+    uint8_t sec[SECTOR_SIZE];
+    for (uint32_t sector = start_sector; sector < block_bitmap_sectors; sector++) {
+        block_read(g_superblock.bitmap_start + sector, sec);
+        uint32_t base_idx = sector * SECTOR_SIZE * 8;
+        uint32_t bit_start = (sector == start_sector && start_idx > base_idx) ? (start_idx - base_idx) : 0;
+        for (uint32_t bit = bit_start; bit < (uint32_t)(SECTOR_SIZE * 8); bit++) {
+            uint32_t idx = base_idx + bit;
+            if (idx >= g_superblock.total_blocks) return 0;
+            uint32_t byte_off = bit / 8;
+            if (!(sec[byte_off] & (1 << (bit % 8)))) {
+                sec[byte_off] |= (1 << (bit % 8));
+                block_write(g_superblock.bitmap_start + sector, sec);
+                return (int)idx;
+            }
         }
     }
     return 0;
@@ -152,7 +163,6 @@ int alloc_block() {
 
 void free_block(uint32_t idx) {
     clear_block_bitmap_bit(idx);
-    flush_block_bitmap_sector(idx);
 }
 
 void create_root() {
@@ -187,35 +197,15 @@ void write_inode(int idx, inode_t* inode) {
 }
 
 void load_block_bitmap() {
-    uint32_t bytes_left = block_bitmap_bytes;
-    uint8_t tmp[SECTOR_SIZE];
-    uint8_t *dst = block_bitmap;
-    for (uint32_t i = 0; i < block_bitmap_sectors; ++i) {
-        block_read(g_superblock.bitmap_start + i, tmp);
-        uint32_t tocopy = bytes_left > SECTOR_SIZE ? SECTOR_SIZE : bytes_left;
-        if (tocopy > 0) memcpy(dst, tmp, tocopy);
-        dst += tocopy;
-        if (bytes_left > SECTOR_SIZE) bytes_left -= SECTOR_SIZE; else bytes_left = 0;
-    }
 }
 
 void save_block_bitmap() {
-    uint32_t bytes_left = block_bitmap_bytes;
-    uint8_t tmp[SECTOR_SIZE];
-    uint8_t *src = block_bitmap;
-    for (uint32_t i = 0; i < block_bitmap_sectors; ++i) {
-        uint32_t tocopy = bytes_left > SECTOR_SIZE ? SECTOR_SIZE : bytes_left;
-        memset(tmp, 0, SECTOR_SIZE);
-        if (tocopy > 0) memcpy(tmp, src, tocopy);
-        block_write(g_superblock.bitmap_start + i, tmp);
-        src += tocopy;
-        if (bytes_left > SECTOR_SIZE) bytes_left -= SECTOR_SIZE; else bytes_left = 0;
-    }
 }
 
 void select_drive(uint16_t base, uint8_t slave) {
     current_ata_base = base;
     current_is_slave = slave;
+    if (base == SATA_DRIVE_MARKER) return;
     outb(base + ATA_REG_DRIVE, 0xA0 | (slave << 4));
     for(int i = 0; i < 4; i++) inb(base + ATA_REG_STATUS);
     uint32_t timeout = 1000000;
@@ -250,13 +240,13 @@ void format_fs() {
     g_superblock.magic = 0x5A4C534A;
     g_superblock.block_size = SECTOR_SIZE;
     g_superblock.total_blocks = g_drives[g_current_drive].total_sectors;
-    if (g_superblock.total_blocks > BLOCK_BITMAP_MAX_SIZE * 8) {
-        g_superblock.total_blocks = BLOCK_BITMAP_MAX_SIZE * 8;
-    }
-    if (g_superblock.total_blocks / 4 > INODE_BITMAP_SIZE * 8) {
-        g_superblock.total_blocks = (INODE_BITMAP_SIZE * 8) * 4;
+    if (g_superblock.total_blocks > 0xFFFFFFFEULL) {
+        g_superblock.total_blocks = 0xFFFFFFFEULL;
     }
     g_superblock.inode_count = g_superblock.total_blocks / 4;
+    if (g_superblock.inode_count > (uint64_t)INODE_BITMAP_SIZE * 8) {
+        g_superblock.inode_count = (uint32_t)(INODE_BITMAP_SIZE * 8);
+    }
     g_superblock.inode_count = (g_superblock.inode_count + 7) & ~7; 
     if (g_superblock.inode_count == 0) g_superblock.inode_count = 8;
     g_superblock.bitmap_start = 1;
@@ -270,15 +260,18 @@ void format_fs() {
     memset(sb_buf, 0, SECTOR_SIZE);
     memcpy(sb_buf, &g_superblock, sizeof(superblock_t));
     block_write(SUPERBLOCK_LBA, sb_buf);
-    memset(block_bitmap, 0, BLOCK_BITMAP_MAX_SIZE);
-    memset(inode_bitmap, 0, INODE_BITMAP_SIZE);
     uint8_t zero_sector[SECTOR_SIZE];
     memset(zero_sector, 0, SECTOR_SIZE);
-    for (uint32_t lba = g_superblock.data_start; lba < g_superblock.total_blocks; lba++) {
-        block_write(lba, zero_sector);
+    for (uint32_t i = 0; i < block_bitmap_sectors; i++) {
+        block_write(g_superblock.bitmap_start + i, zero_sector);
     }
-    save_block_bitmap();
-    save_inode_bitmap();
+    for (uint32_t i = 0; i < inode_bitmap_sectors; i++) {
+        block_write(g_superblock.bitmap_start + block_bitmap_sectors + i, zero_sector);
+    }
+    for (uint32_t i = 0; i < inode_table_blocks; i++) {
+        block_write(g_superblock.inode_start + i, zero_sector);
+    }
+    memset(inode_bitmap, 0, INODE_BITMAP_SIZE);
     create_root();
     create_defdirs();
     klog_status("FORMATTED", 0x00FF00);
@@ -294,13 +287,13 @@ void qformat_fs(void) {
     g_superblock.magic = 0x5A4C534A;
     g_superblock.block_size = SECTOR_SIZE;
     g_superblock.total_blocks = g_drives[g_current_drive].total_sectors;
-    if (g_superblock.total_blocks > BLOCK_BITMAP_MAX_SIZE * 8) {
-        g_superblock.total_blocks = BLOCK_BITMAP_MAX_SIZE * 8;
-    }
-    if (g_superblock.total_blocks / 4 > INODE_BITMAP_SIZE * 8) {
-        g_superblock.total_blocks = (INODE_BITMAP_SIZE * 8) * 4;
+    if (g_superblock.total_blocks > 0xFFFFFFFEULL) {
+        g_superblock.total_blocks = 0xFFFFFFFEULL;
     }
     g_superblock.inode_count = g_superblock.total_blocks / 4;
+    if (g_superblock.inode_count > (uint64_t)INODE_BITMAP_SIZE * 8) {
+        g_superblock.inode_count = (uint32_t)(INODE_BITMAP_SIZE * 8);
+    }
     g_superblock.inode_count = (g_superblock.inode_count + 7) & ~7; 
     if (g_superblock.inode_count == 0) g_superblock.inode_count = 8;
     g_superblock.bitmap_start = 1;
@@ -326,7 +319,6 @@ void qformat_fs(void) {
     memset(sb_buf, 0, SECTOR_SIZE);
     memcpy(sb_buf, &g_superblock, sizeof(superblock_t));
     block_write(SUPERBLOCK_LBA, sb_buf);
-    memset(block_bitmap, 0, BLOCK_BITMAP_MAX_SIZE);
     memset(inode_bitmap, 0, INODE_BITMAP_SIZE);
     for (uint32_t i = 0; i < g_superblock.data_start; i++) {
         set_block_bitmap_bit(i);
@@ -341,14 +333,14 @@ void qformat_fs(void) {
 void drives() {
     g_active_drives = 0;
     uint16_t ports[] = { 0x1F0, 0x170 };
-    for (int p = 0; p < 2; p++) {
-        for (int s = 0; s < 2; s++) {
+    for (int p = 0; p < 2 && g_active_drives < MAX_DRIVES; p++) {
+        for (int s = 0; s < 2 && g_active_drives < MAX_DRIVES; s++) {
             uint16_t base = ports[p];
             if (inb(base + 7) == 0xFF) continue;
             uint32_t sectors = ata_get_total_sectors_dev(base, s);
             if (sectors > 0 && sectors < 0xFFFFFFF) { 
                 if (g_active_drives == 0) {
-                    kklogf_color("Disk 0x%x, Slave %d", 0x009000, (uint32_t)base, (uint32_t)s);
+                    kklogf_color("Disk 0x%x [ata], Slave %d", 0x009000, (uint32_t)base, (uint32_t)s);
                 }
                 g_drives[g_active_drives].ata_base = base;
                 g_drives[g_active_drives].is_slave = s;
@@ -356,6 +348,20 @@ void drives() {
                 g_active_drives++;
             }
         }
+    }
+    int sata_count = ahci_device_count();
+    for (int i = 0; i < sata_count && g_active_drives < MAX_DRIVES; i++) {
+        ahci_device_t* dev = ahci_get_device(i);
+        if (!dev || !dev->present || dev->type != AHCI_DEV_SATA || dev->sector_count == 0) continue;
+        uint64_t sectors64 = dev->sector_count;
+        uint32_t sectors = sectors64 > 0xFFFFFFFEULL ? 0xFFFFFFFE : (uint32_t)sectors64;
+        if (g_active_drives == 0) {
+            kklogf_color("Disk %d [sata]", 0x009000, i);
+        }
+        g_drives[g_active_drives].ata_base = SATA_DRIVE_MARKER;
+        g_drives[g_active_drives].is_slave = (uint8_t)i;
+        g_drives[g_active_drives].total_sectors = sectors;
+        g_active_drives++;
     }
 }
 

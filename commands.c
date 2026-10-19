@@ -169,7 +169,7 @@ void cmd_ld(int argc, char** argv) {
     int mounts = vfs_mount_count();
     for (int i = 0; i < count; i++) {
         int fs = vfs_detect(i);
-        klogf("d%d.0  %d MB  %s\n", i, (int)vfs_drive_size_mb(i), fs == VFS_FS_NONE ? "no filesystem" : vfs_fs_name(fs));
+        klogf("d%d.0  %d MB  [%s]  %s\n", i, (int)vfs_drive_size_mb(i), vfs_drive_bus(i), fs == VFS_FS_NONE ? "no filesystem" : vfs_fs_name(fs));
         for (int j = 0; j < mounts; j++) {
             vfs_mount_info_t info;
             if (vfs_mount_get(j, &info) != 0 || info.drive != i) continue;
