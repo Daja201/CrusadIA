@@ -15,7 +15,6 @@
 #define XHCI_CMD_TRB_COUNT  256
 #define XHCI_EVT_TRB_COUNT  256
 #define XHCI_XFER_TRB_COUNT 256
-#define XHCI_TIMEOUT_LOOPS 4000000
 #define XHCI_MAX_DEVCTX    32
 #define XHCI_MAX_INTR      16
 
@@ -99,6 +98,46 @@ static void xhci_delay(int us) {
     pit_delay_us((uint32_t)us);
 }
 
+/*
+ * All XHCI wait loops below are bounded by real elapsed wall-clock time
+ * instead of a raw CPU loop-iteration count. A fixed iteration count is
+ * tuned implicitly to whatever CPU it was last tested on: the PAUSE
+ * instruction takes very different numbers of cycles on different
+ * microarchitectures (notably AMD Zen/Zen2 parts, where PAUSE is far
+ * cheaper than on older Intel chips), so a loop that comfortably waits
+ * e.g. 100ms on one machine can burn through the same iteration count in
+ * a fraction of that time on another, aborting commands, resets and the
+ * BIOS-to-OS handoff before the real hardware has actually finished.
+ * TSC is calibrated once against the PIT, which is a true hardware
+ * timer independent of CPU speed.
+ */
+static uint64_t g_xhci_tsc_per_ms = 0;
+
+static inline uint64_t xhci_rdtsc(void) {
+    uint32_t lo, hi;
+    asm volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | (uint64_t)lo;
+}
+
+static void xhci_calibrate_timing(void) {
+    if (g_xhci_tsc_per_ms) return;
+    uint64_t start = xhci_rdtsc();
+    pit_delay_us(20000);
+    uint64_t end = xhci_rdtsc();
+    uint64_t delta = end - start;
+    g_xhci_tsc_per_ms = delta / 20;
+    if (g_xhci_tsc_per_ms == 0) g_xhci_tsc_per_ms = 1;
+}
+
+static inline uint64_t xhci_deadline_ms(uint32_t ms) {
+    xhci_calibrate_timing();
+    return xhci_rdtsc() + (uint64_t)g_xhci_tsc_per_ms * (uint64_t)ms;
+}
+
+static inline int xhci_time_left(uint64_t deadline) {
+    return xhci_rdtsc() < deadline;
+}
+
 static xhci_trb_t* xhci_ring_push(xhci_trb_t* ring, int count, int* enq, int* cycle,
                                    uint32_t p_lo, uint32_t p_hi, uint32_t status, uint32_t control_no_cycle) {
     xhci_trb_t* trb = &ring[*enq];
@@ -176,13 +215,16 @@ void xhci_poll_interrupts(void) {
 }
 
 static int xhci_wait_for_trb(xhci_hc_t* hc, void* trb_ptr, uint32_t* out_slot_id) {
-    int loops = XHCI_TIMEOUT_LOOPS;
+    uint64_t deadline = xhci_deadline_ms(500);
     xhci_trb_t ev;
-    while (loops--) {
+    while (xhci_time_left(deadline)) {
         if (xhci_process_one_event(hc, &ev)) {
             if (ev.p_lo == (uint32_t)(uintptr_t)trb_ptr) {
                 int comp = (ev.status >> 24) & 0xFF;
                 if (out_slot_id) *out_slot_id = (ev.control >> 24) & 0xFF;
+                if (comp != XHCI_COMP_SUCCESS) {
+                    klogf_color("sysmsg: xhci command completion code=%d\n", 0xFF0000, comp);
+                }
                 return (comp == XHCI_COMP_SUCCESS) ? 0 : -1;
             }
             continue;
@@ -195,7 +237,13 @@ static int xhci_wait_for_trb(xhci_hc_t* hc, void* trb_ptr, uint32_t* out_slot_id
 static int xhci_run_command(xhci_hc_t* hc, uint32_t p_lo, uint32_t p_hi, uint32_t status, uint32_t control_no_cycle, uint32_t* out_slot_id) {
     xhci_trb_t* trb = xhci_ring_push(hc->cmd_ring, XHCI_CMD_TRB_COUNT, &hc->cmd_enq, &hc->cmd_cycle, p_lo, p_hi, status, control_no_cycle);
     hc->db[0] = 0;
-    return xhci_wait_for_trb(hc, trb, out_slot_id);
+    int r = xhci_wait_for_trb(hc, trb, out_slot_id);
+    if (r != 0) {
+        int trb_type = (int)((control_no_cycle >> XHCI_TRB_TYPE_SHIFT) & 0x3F);
+        klogf_color("sysmsg: xhci command failed type=%d result=%d usbsts=0x%x\n", 0xFF0000,
+            trb_type, r, op_r(hc, XHCI_OP_USBSTS));
+    }
+    return r;
 }
 
 static xhci_dev_ctx_t* xhci_alloc_devctx(void) {
@@ -410,9 +458,9 @@ static int xhci_bulk_transfer(usb_hcd_t* hcdp, usb_device_t* dev, uint8_t ep_add
     hc->db[dc->slot_id] = (uint32_t)dci;
 
     xhci_trb_t ev;
-    int loops = XHCI_TIMEOUT_LOOPS;
+    uint64_t deadline = xhci_deadline_ms(500);
     int actual = -1;
-    while (loops--) {
+    while (xhci_time_left(deadline)) {
         if (xhci_process_one_event(hc, &ev)) {
             if (ev.p_lo == (uint32_t)(uintptr_t)trb) {
                 int comp = (ev.status >> 24) & 0xFF;
@@ -497,8 +545,8 @@ void xhci_bios_handoff_pci(uint32_t bar0_phys) {
 
             if (header & (1u << 16)) {
                 *cap = header | (1u << 24);
-                int w = 1000000;
-                while (w--) {
+                uint64_t deadline = xhci_deadline_ms(1000);
+                while (xhci_time_left(deadline)) {
                     uint32_t v = *cap;
                     if ((v & (1u << 24)) && !(v & (1u << 16))) break;
                     asm volatile("pause");
@@ -521,34 +569,74 @@ void xhci_bios_handoff_pci(uint32_t bar0_phys) {
 static void xhci_reset_and_route_port(xhci_hc_t* hc, int port) {
     int reg = XHCI_OP_PORTSC_BASE + port * 0x10;
     uint32_t status = op_r(hc, reg);
-    if (!(status & XHCI_PORTSC_CCS)) return;
+
+    /*
+     * If the controller supports Port Power Control, ports can come up
+     * unpowered and stay that way until software explicitly powers them
+     * (PORTSC.PP). Firmware that fully owns legacy USB keyboard support
+     * itself usually powers every port during POST so the OS never needs
+     * to care, but firmware that leaves USB entirely to the OS (e.g. a
+     * "boot other OS" / CSM-less path) can leave ports unpowered. Without
+     * this, CCS never sees a connect and the device gets nothing past its
+     * own power-on self-test blink.
+     */
+    if (!(status & XHCI_PORTSC_PP)) {
+        op_w(hc, reg, (status & ~XHCI_PORTSC_RW1CS) | XHCI_PORTSC_PP);
+        xhci_delay(20000);
+        status = op_r(hc, reg);
+        if (!(status & XHCI_PORTSC_PP)) {
+            klogf_color("sysmsg: xhci port %d stuck unpowered portsc=0x%x\n", 0xFF0000, port, status);
+            return;
+        }
+    }
+
+    if (!(status & XHCI_PORTSC_CCS)) {
+        klogf_color("sysmsg: xhci port %d no device connected portsc=0x%x\n", 0x888888, port, status);
+        return;
+    }
 
     status = (status & ~XHCI_PORTSC_RW1CS) | XHCI_PORTSC_PR;
     op_w(hc, reg, status);
 
-    int reset_loops = XHCI_TIMEOUT_LOOPS;
-    while (reset_loops--) {
+    uint64_t reset_deadline = xhci_deadline_ms(500);
+    while (xhci_time_left(reset_deadline)) {
         status = op_r(hc, reg);
         if (status & XHCI_PORTSC_PRC) break;
-        if (!(status & XHCI_PORTSC_CCS)) return;
+        if (!(status & XHCI_PORTSC_CCS)) {
+            klogf_color("sysmsg: xhci port %d disconnected during reset portsc=0x%x\n", 0xFF0000, port, status);
+            return;
+        }
         asm volatile("pause");
+    }
+    if (!(status & XHCI_PORTSC_PRC)) {
+        klogf_color("sysmsg: xhci port %d reset timed out portsc=0x%x\n", 0xFF0000, port, status);
     }
     op_w(hc, reg, (status & ~XHCI_PORTSC_RW1CS) | XHCI_PORTSC_PRC);
 
-    int enable_loops = XHCI_TIMEOUT_LOOPS;
-    while (enable_loops--) {
+    uint64_t enable_deadline = xhci_deadline_ms(500);
+    while (xhci_time_left(enable_deadline)) {
         status = op_r(hc, reg);
         if (status & XHCI_PORTSC_PED) break;
-        if (!(status & XHCI_PORTSC_CCS)) return;
+        if (!(status & XHCI_PORTSC_CCS)) {
+            klogf_color("sysmsg: xhci port %d disconnected waiting for enable portsc=0x%x\n", 0xFF0000, port, status);
+            return;
+        }
         asm volatile("pause");
     }
 
-    if (!(status & XHCI_PORTSC_CCS)) return;
-    if (!(status & XHCI_PORTSC_PED)) return;
+    if (!(status & XHCI_PORTSC_CCS)) {
+        klogf_color("sysmsg: xhci port %d not connected after enable wait portsc=0x%x\n", 0xFF0000, port, status);
+        return;
+    }
+    if (!(status & XHCI_PORTSC_PED)) {
+        klogf_color("sysmsg: xhci port %d never became enabled portsc=0x%x\n", 0xFF0000, port, status);
+        return;
+    }
 
     xhci_delay(10000);
 
     int speed_psi = (int)((status >> XHCI_PORTSC_SPEED_SHIFT) & XHCI_PORTSC_SPEED_MASK);
+    klogf_color("sysmsg: xhci port %d enabled speed_psi=%d, starting enumeration\n", 0x00FF00, port, speed_psi);
     hc->pending_port = port + 1;
     hc->pending_speed_psi = speed_psi;
     usb_enumerate_device(&hc->hcd, 0, port, xhci_speed_psi_to_generic(speed_psi));
@@ -571,7 +659,7 @@ usb_hcd_t* xhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint32_t 
     uint8_t caplength = *(volatile uint8_t*)(hc->base + XHCI_CAP_CAPLENGTH);
     hc->op = hc->base + caplength;
     uint32_t hccparams1 = cap_r(hc, XHCI_CAP_HCCPARAMS1);
-    hc->ctx_size = (hccparams1 & (1u << 3)) ? 64 : 32;
+    hc->ctx_size = (hccparams1 & (1u << 2)) ? 64 : 32;
 
     uint32_t dboff = cap_r(hc, XHCI_CAP_DBOFF) & ~0x3u;
     uint32_t rtsoff = cap_r(hc, XHCI_CAP_RTSOFF) & ~0x1Fu;
@@ -585,14 +673,14 @@ usb_hcd_t* xhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint32_t 
     if (hc->n_ports > USB_MAX_HUB_PORTS) hc->n_ports = USB_MAX_HUB_PORTS;
 
     op_w(hc, XHCI_OP_USBCMD, op_r(hc, XHCI_OP_USBCMD) & ~XHCI_CMD_RUN);
-    int loops = XHCI_TIMEOUT_LOOPS;
-    while (loops-- && !(op_r(hc, XHCI_OP_USBSTS) & XHCI_STS_HCHALTED)) asm volatile("pause");
+    uint64_t deadline = xhci_deadline_ms(500);
+    while (xhci_time_left(deadline) && !(op_r(hc, XHCI_OP_USBSTS) & XHCI_STS_HCHALTED)) asm volatile("pause");
 
     op_w(hc, XHCI_OP_USBCMD, XHCI_CMD_HCRESET);
-    loops = XHCI_TIMEOUT_LOOPS;
-    while (loops-- && (op_r(hc, XHCI_OP_USBCMD) & XHCI_CMD_HCRESET)) asm volatile("pause");
-    loops = XHCI_TIMEOUT_LOOPS;
-    while (loops-- && (op_r(hc, XHCI_OP_USBSTS) & XHCI_STS_CNR)) asm volatile("pause");
+    deadline = xhci_deadline_ms(500);
+    while (xhci_time_left(deadline) && (op_r(hc, XHCI_OP_USBCMD) & XHCI_CMD_HCRESET)) asm volatile("pause");
+    deadline = xhci_deadline_ms(1000);
+    while (xhci_time_left(deadline) && (op_r(hc, XHCI_OP_USBSTS) & XHCI_STS_CNR)) asm volatile("pause");
 
     op_w(hc, XHCI_OP_CONFIG, (uint32_t)hc->max_slots);
 
@@ -641,8 +729,10 @@ usb_hcd_t* xhci_probe_and_init(uint8_t bus, uint8_t dev, uint8_t func, uint32_t 
     rt_w(hc, XHCI_RT_IR0 + XHCI_IR_ERSTBA_HI, 0);
 
     op_w(hc, XHCI_OP_USBCMD, op_r(hc, XHCI_OP_USBCMD) | XHCI_CMD_RUN);
-    loops = XHCI_TIMEOUT_LOOPS;
-    while (loops-- && (op_r(hc, XHCI_OP_USBSTS) & XHCI_STS_HCHALTED)) asm volatile("pause");
+    deadline = xhci_deadline_ms(500);
+    while (xhci_time_left(deadline) && (op_r(hc, XHCI_OP_USBSTS) & XHCI_STS_HCHALTED)) asm volatile("pause");
+
+    klogf_color("sysmsg: xhci usbsts after run 0x%x\n", 0x00FFFF, op_r(hc, XHCI_OP_USBSTS));
 
     hc->hcd.control_transfer = xhci_do_control;
     hc->hcd.setup_interrupt_in = xhci_setup_interrupt_in;

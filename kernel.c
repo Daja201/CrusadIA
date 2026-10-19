@@ -32,8 +32,10 @@ void timer_init(uint32_t frequency) {
     outb(0x40, (uint8_t)((divisor >> 8) & 0xFF));
 }
 
+
 void kernel_task_main() {
     int last_sec = -1;
+    int last_logged_sec = -1;
     for (;;) {
         int needs_redraw = 0;
         extern volatile int usb_kbd_dirty;
@@ -53,6 +55,9 @@ void kernel_task_main() {
         if (sec != last_sec) { //every second -> +1 last_sec
             last_sec = sec;
             needs_redraw = 1;
+        }
+        if (sec != last_logged_sec) {
+            last_logged_sec = sec;
         }
         if (needs_redraw) { //redraws if any of the before ifs swithced needs redraw (like new char from queqe)
             cursor('d');
