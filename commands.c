@@ -142,7 +142,9 @@ static void cmd_ac97_pause(int argc, char** argv) {
     ac97_pause();
 }
 
-void cmd_cat(int argc, char** argv) {
+void cmd_meow(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
     const char *cat =
 "    /\\___/\\   \n"
 "   /       \\  \n"
@@ -295,20 +297,6 @@ static int format_drive(const char* input, const char* fsname) {
     return r;
 }
 
-static void list_directory(const char* path) {
-    vfs_dirent_t entries[64];
-    int count = vfs_readdir(path, entries, 64);
-    if (count < 0) {
-        kklogf("ls: %s", vfs_strerror(count));
-        return;
-    }
-    for (int i = 0; i < count; i++) {
-        klog("  ");
-        klog_color(entries[i].name, entries[i].is_dir ? 0xFF0000 : 0x00FF00);
-        klog("\n");
-    }
-}
-
 static void read_file(const char* path) {
     int fd = r3_open(path, O_RDONLY);
     if (fd < 0) {
@@ -447,8 +435,77 @@ void cmd_format(int argc, char** argv) {
     else kklogf("%s formatted", drive);
 }
 
+static int path_join(char* out, int outsz, const char* dir, const char* name);
+
+static const char* base_name(const char* path) {
+    const char* s = strrchr(path, '/');
+    return s ? s + 1 : path;
+}
+
+static int path_is_dir(const char* path) {
+    vfs_stat_t st;
+    if (vfs_stat(path, &st) != 0) return 0;
+    return st.is_dir;
+}
+
+static void do_ls(const char* path, int longfmt, int onecol, int recursive, int header) {
+    vfs_dirent_t entries[64];
+    int count = vfs_readdir(path, entries, 64);
+    if (count < 0) {
+        kklogf("ls: cannot access '%s': %s\n", path, vfs_strerror(count));
+        return;
+    }
+    if (header) klogf("%s:\n", path);
+    int col = 0;
+    for (int i = 0; i < count; i++) {
+        if (longfmt) {
+            klogf("%c %8d ", entries[i].is_dir ? 'd' : '-', entries[i].size);
+            klog_color(entries[i].name, entries[i].is_dir ? 0xFF0000 : 0x00FF00);
+            klog("\n");
+        } else if (onecol) {
+            klog_color(entries[i].name, entries[i].is_dir ? 0xFF0000 : 0x00FF00);
+            klog("\n");
+        } else {
+            klog("  ");
+            klog_color(entries[i].name, entries[i].is_dir ? 0xFF0000 : 0x00FF00);
+            if (++col % 4 == 0) klog("\n");
+        }
+    }
+    if (!longfmt && !onecol && count && col % 4 != 0) klog("\n");
+    if (recursive) {
+        for (int i = 0; i < count; i++) {
+            if (!entries[i].is_dir) continue;
+            if (strcmp(entries[i].name, ".") == 0 || strcmp(entries[i].name, "..") == 0) continue;
+            char child[VFS_PATH_MAX];
+            path_join(child, sizeof(child), path, entries[i].name);
+            klog("\n");
+            do_ls(child, longfmt, onecol, recursive, 1);
+        }
+    }
+}
+
 void cmd_ls(int argc, char** argv) {
-    list_directory(argc >= 2 ? argv[1] : ".");
+    int longfmt = 0, onecol = 0, recursive = 0, all = 0;
+    const char* paths[16];
+    int npaths = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            for (int j = 1; argv[i][j]; j++) {
+                if (argv[i][j] == 'l') longfmt = 1;
+                else if (argv[i][j] == '1') onecol = 1;
+                else if (argv[i][j] == 'R') recursive = 1;
+                else if (argv[i][j] == 'a') all = 1;
+            }
+        } else if (npaths < 16) {
+            paths[npaths++] = argv[i];
+        }
+    }
+    (void)all;
+    if (npaths == 0) paths[npaths++] = ".";
+    for (int i = 0; i < npaths; i++) {
+        do_ls(paths[i], longfmt, onecol, recursive, npaths > 1 || recursive);
+        if (i + 1 < npaths) klog("\n");
+    }
 }
 
 void cmd_cd(int argc, char** argv) {
@@ -458,6 +515,588 @@ void cmd_cd(int argc, char** argv) {
     }
     int r = vfs_chdir(argv[1]);
     if (r != 0) kklogf("cd: %s", vfs_strerror(r));
+}
+
+void cmd_pwd(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    kklogf("%s\n", vfs_getcwd());
+}
+
+static int path_join(char* out, int outsz, const char* dir, const char* name) {
+    int n = 0;
+    for (int i = 0; dir[i] && n < outsz - 1; i++) out[n++] = dir[i];
+    if (n > 0 && out[n - 1] != '/' && n < outsz - 1) out[n++] = '/';
+    for (int i = 0; name[i] && n < outsz - 1; i++) out[n++] = name[i];
+    out[n] = '\0';
+    return n;
+}
+
+static void mkdir_one(const char* path, int parents) {
+    if (!parents) {
+        int r = r3_mkdir(path);
+        if (r != 0) kklogf("mkdir: cannot create directory '%s'\n", path);
+        return;
+    }
+    char buf[VFS_PATH_MAX];
+    int len = 0;
+    for (int i = 0; path[i] && len < VFS_PATH_MAX - 1; i++) {
+        buf[len++] = path[i];
+        buf[len] = '\0';
+        if (path[i] == '/' && len > 1) r3_mkdir(buf);
+    }
+    r3_mkdir(buf);
+}
+
+void cmd_mkdir(int argc, char** argv) {
+    int parents = 0;
+    int npaths = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-p") == 0) parents = 1;
+        else npaths++;
+    }
+    if (!npaths) {
+        kklog("Usage: mkdir [-p] <dir>...\n");
+        return;
+    }
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-p") == 0) continue;
+        mkdir_one(argv[i], parents);
+    }
+}
+
+static int remove_recursive(const char* path) {
+    if (!path_is_dir(path)) return r3_unlink(path);
+    vfs_dirent_t entries[64];
+    int count = vfs_readdir(path, entries, 64);
+    if (count < 0) return count;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(entries[i].name, ".") == 0 || strcmp(entries[i].name, "..") == 0) continue;
+        char child[VFS_PATH_MAX];
+        path_join(child, sizeof(child), path, entries[i].name);
+        remove_recursive(child);
+    }
+    return vfs_remove(path);
+}
+
+void cmd_rm(int argc, char** argv) {
+    int recursive = 0, force = 0;
+    const char* paths[16];
+    int npaths = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            for (int j = 1; argv[i][j]; j++) {
+                if (argv[i][j] == 'r' || argv[i][j] == 'R') recursive = 1;
+                else if (argv[i][j] == 'f') force = 1;
+            }
+        } else if (npaths < 16) {
+            paths[npaths++] = argv[i];
+        }
+    }
+    if (!npaths) {
+        kklog("Usage: rm [-rf] <path>...\n");
+        return;
+    }
+    for (int i = 0; i < npaths; i++) {
+        if (recursive && path_is_dir(paths[i])) {
+            int r = remove_recursive(paths[i]);
+            if (r != 0 && !force) kklogf("rm: cannot remove '%s'\n", paths[i]);
+        } else if (path_is_dir(paths[i])) {
+            if (!force) kklogf("rm: cannot remove '%s': is a directory\n", paths[i]);
+        } else {
+            int r = r3_unlink(paths[i]);
+            if (r != 0 && !force) kklogf("rm: cannot remove '%s'\n", paths[i]);
+        }
+    }
+}
+
+static int copy_file(const char* src, const char* dst) {
+    int sfd = r3_open(src, O_RDONLY);
+    if (sfd < 0) return -1;
+    int dfd = r3_open(dst, O_WRONLY | O_CREAT | O_TRUNC);
+    if (dfd < 0) {
+        r3_close(sfd);
+        return -1;
+    }
+    static uint8_t buf[4096];
+    long n;
+    while ((n = r3_read(sfd, buf, sizeof(buf))) > 0) {
+        r3_write(dfd, buf, (uint32_t)n);
+    }
+    r3_close(sfd);
+    r3_close(dfd);
+    return 0;
+}
+
+static int copy_recursive(const char* src, const char* dst) {
+    if (!path_is_dir(src)) return copy_file(src, dst);
+    r3_mkdir(dst);
+    vfs_dirent_t entries[64];
+    int count = vfs_readdir(src, entries, 64);
+    if (count < 0) return count;
+    for (int i = 0; i < count; i++) {
+        if (strcmp(entries[i].name, ".") == 0 || strcmp(entries[i].name, "..") == 0) continue;
+        char childsrc[VFS_PATH_MAX];
+        char childdst[VFS_PATH_MAX];
+        path_join(childsrc, sizeof(childsrc), src, entries[i].name);
+        path_join(childdst, sizeof(childdst), dst, entries[i].name);
+        copy_recursive(childsrc, childdst);
+    }
+    return 0;
+}
+
+void cmd_cp(int argc, char** argv) {
+    int recursive = 0;
+    const char* paths[16];
+    int npaths = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            for (int j = 1; argv[i][j]; j++) {
+                if (argv[i][j] == 'r' || argv[i][j] == 'R') recursive = 1;
+            }
+        } else if (npaths < 16) {
+            paths[npaths++] = argv[i];
+        }
+    }
+    if (npaths < 2) {
+        kklog("Usage: cp [-r] <src>... <dst>\n");
+        return;
+    }
+    const char* dst = paths[npaths - 1];
+    int nsrc = npaths - 1;
+    int dst_is_dir = path_is_dir(dst);
+    if (nsrc > 1 && !dst_is_dir) {
+        kklogf("cp: target '%s' is not a directory\n", dst);
+        return;
+    }
+    for (int i = 0; i < nsrc; i++) {
+        char target[VFS_PATH_MAX];
+        const char* real_dst = dst;
+        if (dst_is_dir) {
+            path_join(target, sizeof(target), dst, base_name(paths[i]));
+            real_dst = target;
+        }
+        int r;
+        if (recursive && path_is_dir(paths[i])) r = copy_recursive(paths[i], real_dst);
+        else if (path_is_dir(paths[i])) {
+            kklogf("cp: -r not specified; omitting directory '%s'\n", paths[i]);
+            continue;
+        } else r = copy_file(paths[i], real_dst);
+        if (r != 0) kklogf("cp: cannot copy '%s'\n", paths[i]);
+    }
+}
+
+void cmd_mv(int argc, char** argv) {
+    const char* paths[16];
+    int npaths = 0;
+    for (int i = 1; i < argc; i++) {
+        if (npaths < 16) paths[npaths++] = argv[i];
+    }
+    if (npaths < 2) {
+        kklog("Usage: mv <src>... <dst>\n");
+        return;
+    }
+    const char* dst = paths[npaths - 1];
+    int nsrc = npaths - 1;
+    int dst_is_dir = path_is_dir(dst);
+    if (nsrc > 1 && !dst_is_dir) {
+        kklogf("mv: target '%s' is not a directory\n", dst);
+        return;
+    }
+    for (int i = 0; i < nsrc; i++) {
+        char target[VFS_PATH_MAX];
+        const char* real_dst = dst;
+        if (dst_is_dir) {
+            path_join(target, sizeof(target), dst, base_name(paths[i]));
+            real_dst = target;
+        }
+        int r = path_is_dir(paths[i]) ? copy_recursive(paths[i], real_dst) : copy_file(paths[i], real_dst);
+        if (r != 0) {
+            kklogf("mv: cannot move '%s'\n", paths[i]);
+            continue;
+        }
+        if (path_is_dir(paths[i])) remove_recursive(paths[i]);
+        else r3_unlink(paths[i]);
+    }
+}
+
+void cmd_touch(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: touch <file>...\n");
+        return;
+    }
+    for (int i = 1; i < argc; i++) {
+        int fd = r3_open(argv[i], O_WRONLY | O_CREAT);
+        if (fd < 0) {
+            kklogf("touch: cannot touch '%s'\n", argv[i]);
+            continue;
+        }
+        r3_close(fd);
+    }
+}
+
+void cmd_cat(int argc, char** argv) {
+    int numbered = 0;
+    const char* paths[16];
+    int npaths = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            for (int j = 1; argv[i][j]; j++) {
+                if (argv[i][j] == 'n') numbered = 1;
+            }
+        } else if (npaths < 16) {
+            paths[npaths++] = argv[i];
+        }
+    }
+    if (!npaths) {
+        kklog("Usage: cat [-n] <file>...\n");
+        return;
+    }
+    static uint8_t buf[4096];
+    for (int p = 0; p < npaths; p++) {
+        int fd = r3_open(paths[p], O_RDONLY);
+        if (fd < 0) {
+            kklogf("cat: %s: cannot open\n", paths[p]);
+            continue;
+        }
+        long n;
+        int at_line_start = 1;
+        int line = 1;
+        while ((n = r3_read(fd, buf, sizeof(buf))) > 0) {
+            for (long k = 0; k < n; k++) {
+                if (numbered && at_line_start) {
+                    klogf("%6d\t", line++);
+                    at_line_start = 0;
+                }
+                char ch[2] = {(char)buf[k], '\0'};
+                vesa_print_string(ch);
+                if (buf[k] == '\n') at_line_start = 1;
+            }
+        }
+        r3_close(fd);
+    }
+}
+
+#define TEXT_BUF_SIZE 32768
+#define TEXT_MAX_LINES 512
+
+static uint8_t text_buf[TEXT_BUF_SIZE];
+static char* text_lines[TEXT_MAX_LINES];
+
+static long load_file(const char* path, uint8_t* buf, long bufsz) {
+    int fd = r3_open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    long size = r3_lseek(fd, 0, SEEK_END);
+    r3_lseek(fd, 0, SEEK_SET);
+    uint32_t count = size > bufsz ? (uint32_t)bufsz : (size > 0 ? (uint32_t)size : 0);
+    long bytes = count ? r3_read(fd, buf, count) : 0;
+    r3_close(fd);
+    return bytes;
+}
+
+static int split_lines(uint8_t* buf, long bytes, char** lines, int maxlines) {
+    int n = 0;
+    long start = 0;
+    for (long i = 0; i < bytes; i++) {
+        if (buf[i] == '\n') {
+            buf[i] = '\0';
+            if (n < maxlines) lines[n++] = (char*)(buf + start);
+            start = i + 1;
+        }
+    }
+    if (start < bytes && n < maxlines) lines[n++] = (char*)(buf + start);
+    return n;
+}
+
+void cmd_echo(int argc, char** argv) {
+    int nonewline = 0, interpret = 0;
+    int start = 1;
+    for (; start < argc; start++) {
+        if (strcmp(argv[start], "-n") == 0) nonewline = 1;
+        else if (strcmp(argv[start], "-e") == 0) interpret = 1;
+        else break;
+    }
+    for (int i = start; i < argc; i++) {
+        const char* s = argv[i];
+        if (interpret) {
+            for (int j = 0; s[j]; j++) {
+                if (s[j] == '\\' && s[j + 1] == 'n') {
+                    klog("\n");
+                    j++;
+                } else if (s[j] == '\\' && s[j + 1] == 't') {
+                    klog("\t");
+                    j++;
+                } else {
+                    char ch[2] = {s[j], '\0'};
+                    klog(ch);
+                }
+            }
+        } else {
+            klog(s);
+        }
+        if (i + 1 < argc) klog(" ");
+    }
+    if (!nonewline) klog("\n");
+}
+
+void cmd_printf(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: printf <format> [args...]\n");
+        return;
+    }
+    const char* fmt = argv[1];
+    int argi = 2;
+    for (int i = 0; fmt[i]; i++) {
+        if (fmt[i] == '\\' && fmt[i + 1] == 'n') {
+            klog("\n");
+            i++;
+        } else if (fmt[i] == '\\' && fmt[i + 1] == 't') {
+            klog("\t");
+            i++;
+        } else if (fmt[i] == '%' && fmt[i + 1] == 's') {
+            klog(argi < argc ? argv[argi++] : "");
+            i++;
+        } else if (fmt[i] == '%' && fmt[i + 1] == 'd') {
+            int v = argi < argc ? atoi(argv[argi++]) : 0;
+            char b[12];
+            itoa(v, b, 10);
+            klog(b);
+            i++;
+        } else if (fmt[i] == '%' && fmt[i + 1] == '%') {
+            klog("%");
+            i++;
+        } else {
+            char ch[2] = {fmt[i], '\0'};
+            klog(ch);
+        }
+    }
+}
+
+void cmd_head(int argc, char** argv) {
+    int n = 10;
+    const char* path = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) n = atoi(argv[++i]);
+        else path = argv[i];
+    }
+    if (!path) {
+        kklog("Usage: head [-n N] <file>\n");
+        return;
+    }
+    long bytes = load_file(path, text_buf, TEXT_BUF_SIZE);
+    if (bytes < 0) {
+        kklogf("head: cannot open '%s'\n", path);
+        return;
+    }
+    int count = split_lines(text_buf, bytes, text_lines, TEXT_MAX_LINES);
+    int limit = n < count ? n : count;
+    for (int i = 0; i < limit; i++) klogf("%s\n", text_lines[i]);
+}
+
+void cmd_tail(int argc, char** argv) {
+    int n = 10;
+    const char* path = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-n") == 0 && i + 1 < argc) n = atoi(argv[++i]);
+        else path = argv[i];
+    }
+    if (!path) {
+        kklog("Usage: tail [-n N] <file>\n");
+        return;
+    }
+    long bytes = load_file(path, text_buf, TEXT_BUF_SIZE);
+    if (bytes < 0) {
+        kklogf("tail: cannot open '%s'\n", path);
+        return;
+    }
+    int count = split_lines(text_buf, bytes, text_lines, TEXT_MAX_LINES);
+    int from = count - n;
+    if (from < 0) from = 0;
+    for (int i = from; i < count; i++) klogf("%s\n", text_lines[i]);
+}
+
+void cmd_wc(int argc, char** argv) {
+    int show_l = 0, show_w = 0, show_c = 0;
+    const char* path = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            for (int j = 1; argv[i][j]; j++) {
+                if (argv[i][j] == 'l') show_l = 1;
+                else if (argv[i][j] == 'w') show_w = 1;
+                else if (argv[i][j] == 'c') show_c = 1;
+            }
+        } else path = argv[i];
+    }
+    if (!path) {
+        kklog("Usage: wc [-lwc] <file>\n");
+        return;
+    }
+    if (!show_l && !show_w && !show_c) show_l = show_w = show_c = 1;
+    long bytes = load_file(path, text_buf, TEXT_BUF_SIZE);
+    if (bytes < 0) {
+        kklogf("wc: cannot open '%s'\n", path);
+        return;
+    }
+    long lines = 0, words = 0;
+    int inword = 0;
+    for (long i = 0; i < bytes; i++) {
+        if (text_buf[i] == '\n') lines++;
+        if (text_buf[i] == ' ' || text_buf[i] == '\t' || text_buf[i] == '\n') {
+            inword = 0;
+        } else {
+            if (!inword) words++;
+            inword = 1;
+        }
+    }
+    if (show_l) klogf("%d ", (int)lines);
+    if (show_w) klogf("%d ", (int)words);
+    if (show_c) klogf("%d ", (int)bytes);
+    klogf("%s\n", path);
+}
+
+void cmd_grep(int argc, char** argv) {
+    int shownum = 0, invert = 0;
+    const char* pattern = 0;
+    const char* path = 0;
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            for (int j = 1; argv[i][j]; j++) {
+                if (argv[i][j] == 'n') shownum = 1;
+                else if (argv[i][j] == 'v') invert = 1;
+            }
+        } else if (!pattern) {
+            pattern = argv[i];
+        } else {
+            path = argv[i];
+        }
+    }
+    if (!pattern || !path) {
+        kklog("Usage: grep [-nv] <pattern> <file>\n");
+        return;
+    }
+    long bytes = load_file(path, text_buf, TEXT_BUF_SIZE);
+    if (bytes < 0) {
+        kklogf("grep: cannot open '%s'\n", path);
+        return;
+    }
+    int count = split_lines(text_buf, bytes, text_lines, TEXT_MAX_LINES);
+    for (int i = 0; i < count; i++) {
+        int match = strstr(text_lines[i], pattern) != 0;
+        if (match != invert) {
+            if (shownum) klogf("%d:", i + 1);
+            klogf("%s\n", text_lines[i]);
+        }
+    }
+}
+
+static int cmp_lines(const void* a, const void* b) {
+    return strcmp(*(const char**)a, *(const char**)b);
+}
+
+void cmd_sort(int argc, char** argv) {
+    int reverse = 0;
+    const char* path = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-r") == 0) reverse = 1;
+        else path = argv[i];
+    }
+    if (!path) {
+        kklog("Usage: sort [-r] <file>\n");
+        return;
+    }
+    long bytes = load_file(path, text_buf, TEXT_BUF_SIZE);
+    if (bytes < 0) {
+        kklogf("sort: cannot open '%s'\n", path);
+        return;
+    }
+    int count = split_lines(text_buf, bytes, text_lines, TEXT_MAX_LINES);
+    qsort(text_lines, count, sizeof(char*), cmp_lines);
+    if (!reverse) {
+        for (int i = 0; i < count; i++) klogf("%s\n", text_lines[i]);
+    } else {
+        for (int i = count - 1; i >= 0; i--) klogf("%s\n", text_lines[i]);
+    }
+}
+
+void cmd_uniq(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: uniq <file>\n");
+        return;
+    }
+    long bytes = load_file(argv[1], text_buf, TEXT_BUF_SIZE);
+    if (bytes < 0) {
+        kklogf("uniq: cannot open '%s'\n", argv[1]);
+        return;
+    }
+    int count = split_lines(text_buf, bytes, text_lines, TEXT_MAX_LINES);
+    for (int i = 0; i < count; i++) {
+        if (i == 0 || strcmp(text_lines[i], text_lines[i - 1]) != 0) klogf("%s\n", text_lines[i]);
+    }
+}
+
+void cmd_true(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+}
+
+void cmd_false(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+}
+
+void cmd_whoami(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    kklog("root\n");
+}
+
+void cmd_uname(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    kklog("Crusader OS i686\n");
+}
+
+void cmd_basename(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: basename <path>\n");
+        return;
+    }
+    kklogf("%s\n", base_name(argv[1]));
+}
+
+void cmd_dirname(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: dirname <path>\n");
+        return;
+    }
+    char buf[VFS_PATH_MAX];
+    strncpy(buf, argv[1], sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char* slash = strrchr(buf, '/');
+    if (!slash) {
+        kklog(".\n");
+        return;
+    }
+    if (slash == buf) {
+        kklog("/\n");
+        return;
+    }
+    *slash = '\0';
+    kklogf("%s\n", buf);
+}
+
+void cmd_which(int argc, char** argv) {
+    if (argc < 2) {
+        kklog("Usage: which <command>\n");
+        return;
+    }
+    for (int i = 0; i < command_count; i++) {
+        if (strcmp(commands[i].name, argv[1]) == 0) {
+            kklogf("%s\n", argv[1]);
+            return;
+        }
+    }
+    kklogf("which: %s: not found\n", argv[1]);
 }
 
 void cmd_read(int argc, char** argv) {
@@ -799,14 +1438,36 @@ command_t commands[] = {
     {"clear", cmd_clear},
     {"reboot", cmd_reboot},
     {"cow", cmd_cow},
+    {"meow", cmd_meow},
     {"cat", cmd_cat},
     {"ld", cmd_ld},
     {"fd", cmd_find},
     {"read", cmd_read},
     {"ls", cmd_ls},
+    {"pwd", cmd_pwd},
+    {"mkdir", cmd_mkdir},
+    {"rm", cmd_rm},
+    {"cp", cmd_cp},
+    {"mv", cmd_mv},
+    {"touch", cmd_touch},
+    {"echo", cmd_echo},
+    {"printf", cmd_printf},
+    {"head", cmd_head},
+    {"tail", cmd_tail},
+    {"wc", cmd_wc},
+    {"grep", cmd_grep},
+    {"sort", cmd_sort},
+    {"uniq", cmd_uniq},
+    {"true", cmd_true},
+    {"false", cmd_false},
+    {"whoami", cmd_whoami},
+    {"uname", cmd_uname},
+    {"basename", cmd_basename},
+    {"dirname", cmd_dirname},
+    {"which", cmd_which},
+    {"date", cmd_time},
     {"lib", library},
     {"wr", cmd_wr},
-    {"dl", cmd_dl},
     {"time", cmd_time},
     {"format", cmd_format},
     {"fs", cmd_fs},
@@ -817,7 +1478,6 @@ command_t commands[] = {
     {"mem", cmd_mem},
     {"shutdown", cmd_shutdown},
     {"app", cmd_app},
-    {"mf", cmd_mf},
     {"cd", cmd_cd},
     {"usb", cmd_usb},
     {"open", cmd_open},
