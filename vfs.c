@@ -7,6 +7,8 @@
 #include "fcntl.h"
 #include "unistd.h"
 #include "sys/stat.h"
+#include "terminal.h"
+#include "ps2.h"
 
 extern int g_current_drive;
 extern superblock_t g_superblock;
@@ -1444,25 +1446,69 @@ void vfs_init(void) {
     vfs_unlock();
 }
 
+#define STDIO_FD_IN  0
+#define STDIO_FD_OUT 1
+#define STDIO_FD_ERR 2
+
+static int is_stdio_fd(int fd) {
+    return fd == STDIO_FD_IN || fd == STDIO_FD_OUT || fd == STDIO_FD_ERR;
+}
+
+static long stdio_write(const void* buf, size_t count) {
+    if (!buf) return -1;
+    const char* p = (const char*)buf;
+    for (size_t i = 0; i < count; i++) {
+        char c[2] = { p[i], 0 };
+        klog(c);
+    }
+    return (long)count;
+}
+
+static long stdio_read(void* buf, size_t count) {
+    if (!buf || count == 0) return 0;
+    char* p = (char*)buf;
+    size_t got = 0;
+    while (got == 0) {
+        int c;
+        while (got < count && (c = stdin_getc()) >= 0) {
+            p[got++] = (char)c;
+            if (c == '\n') break;
+        }
+        if (got == 0) {
+            ps2_poll();
+            __asm__ volatile("pause" ::: "memory");
+        }
+    }
+    return (long)got;
+}
+
+#define STDIO_FD_COUNT 3
+
 int open(const char* path, int flags, ...) {
     int r = vfs_open_tcc(path, flags);
-    return r < 0 ? -1 : r;
+    return r < 0 ? -1 : r + STDIO_FD_COUNT;
 }
 
 int close(int fd) {
-    return vfs_close(fd) < 0 ? -1 : 0;
+    if (is_stdio_fd(fd)) return 0;
+    return vfs_close(fd - STDIO_FD_COUNT) < 0 ? -1 : 0;
 }
 
 long read(int fd, void* buf, size_t count) {
-    return vfs_read(fd, buf, (uint32_t)count);
+    if (fd == STDIO_FD_IN) return stdio_read(buf, count);
+    if (is_stdio_fd(fd)) return -1;
+    return vfs_read(fd - STDIO_FD_COUNT, buf, (uint32_t)count);
 }
 
 long write(int fd, const void* buf, size_t count) {
-    return vfs_write(fd, buf, (uint32_t)count);
+    if (fd == STDIO_FD_OUT || fd == STDIO_FD_ERR) return stdio_write(buf, count);
+    if (is_stdio_fd(fd)) return -1;
+    return vfs_write(fd - STDIO_FD_COUNT, buf, (uint32_t)count);
 }
 
 long lseek(int fd, long offset, int whence) {
-    return vfs_lseek(fd, offset, whence);
+    if (is_stdio_fd(fd)) return -1;
+    return vfs_lseek(fd - STDIO_FD_COUNT, offset, whence);
 }
 
 int unlink(const char* path) {

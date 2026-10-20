@@ -2,7 +2,10 @@
 #include "task.h"
 #include "klog.h"
 #include "vfs.h"
+#include "elf.h"
+#include "string.h"
 
+extern int current_task;
 extern int open(const char *path, int flags, ...);
 extern int close(int fd);
 extern long read(int fd, void *buf, size_t count);
@@ -29,6 +32,35 @@ uint32_t syscall_dispatch(registers_t *regs) {
 
         case SYS_YIELD:
             return 0;
+
+        case SYS_BRK:
+            return task_set_heap_break(current_task, regs->ebx);
+
+        case SYS_SPAWN: {
+            const char* upath = (const char*)regs->ebx;
+            char* const* uargv = (char* const*)regs->ecx;
+            int argc = (int)regs->edx;
+            if (!upath || argc < 0 || argc > ELF_SPAWN_MAX_ARGV) return (uint32_t)-1;
+            if (argc > 0 && !uargv) return (uint32_t)-1;
+
+            char path_buf[ELF_SPAWN_PATH_MAX];
+            char arg_bufs[ELF_SPAWN_MAX_ARGV][ELF_SPAWN_ARG_MAX];
+            char* argv_k[ELF_SPAWN_MAX_ARGV];
+
+            strncpy(path_buf, upath, ELF_SPAWN_PATH_MAX - 1);
+            path_buf[ELF_SPAWN_PATH_MAX - 1] = 0;
+
+            for (int i = 0; i < argc; i++) {
+                const char* a = uargv[i];
+                if (!a) return (uint32_t)-1;
+                strncpy(arg_bufs[i], a, ELF_SPAWN_ARG_MAX - 1);
+                arg_bufs[i][ELF_SPAWN_ARG_MAX - 1] = 0;
+                argv_k[i] = arg_bufs[i];
+            }
+
+            int r = elf_exec_argv(path_buf, argv_k, argc, 1);
+            return r == ELF_OK ? 0 : (uint32_t)-1;
+        }
 
         case SYS_COSFS_OPEN:
         case SYS_FAT32_OPEN: {

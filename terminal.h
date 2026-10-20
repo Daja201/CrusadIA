@@ -15,4 +15,6 @@ void terminal_key(char c);
 void terminal_show_prompt(void);
 void klog(const char* s);
 void vga_init(void);
+void stdin_feed(char c);
+int stdin_getc(void);
 #endif

@@ -95,6 +95,7 @@ static void usbhid_keyboard_report(usb_device_t* dev, uint8_t* report, int len) 
             char c = shift ? hid_map_upper[code] : hid_map_lower[code];
             if (c != 0) {
                 terminal_key(c);
+                stdin_feed(c);
                 usb_kbd_dirty = 1;
             }
         }

@@ -11,6 +11,9 @@ long r3_lseek(int fd, long offset, int whence);
 int r3_unlink(const char* path);
 int r3_mkdir(const char* path);
 
+uint32_t r3_brk(uint32_t new_break);
+void* r3_sbrk(int32_t increment);
+
 int r3_cosfs_open(const char* path, int flags);
 int r3_cosfs_close(int fd);
 long r3_cosfs_read(int fd, void* buf, uint32_t count);

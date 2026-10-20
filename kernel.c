@@ -19,6 +19,7 @@
 #include "usbhid.h"
 #include "ps2.h"
 #include "ahci.h"
+#include "env.h"
 
 //initializes pci and searches for usb devices
 void usb_pci_init(void);
@@ -91,6 +92,7 @@ void kmain(unsigned long mb_magic, unsigned long mb_info) {
     drives();
     vfs_init();
     klog_status("FILESYSTEM OK", 0x00FF00);
+    env_init();
     timer_init(1000); 
     init_multitasking();
     tss_allow_io_range(0x70, 2);

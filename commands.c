@@ -26,6 +26,7 @@
 #include "elf.h"
 #include "ring3fs.h"
 #include "unistd.h"
+#include "env.h"
 
 #define CHUNK_SIZE 65532
 void cmd_cd(int argc, char** argv);
@@ -35,6 +36,9 @@ void cmd_wr(int argc, char** argv);
 void cmd_umount(int argc, char** argv);
 void cmd_setroot(int argc, char** argv);
 void cmd_exec(int argc, char** argv);
+void cmd_export(int argc, char** argv);
+void cmd_unset(int argc, char** argv);
+void cmd_printenv(int argc, char** argv);
 extern uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 extern void pci_config_write(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 
@@ -1292,9 +1296,43 @@ void cmd_exec(int argc, char** argv) {
         kklogf("usage: exec <file.elf>\n");
         return;
     }
-    int r = elf_exec(argv[1], 1);
+    int r = elf_exec_argv(argv[1], &argv[1], argc - 1, 1);
     if (r != ELF_OK) {
         klogf_color("exec: %s: %s\n", 0xFF0000, argv[1], elf_strerror(r));
+    }
+}
+
+void cmd_export(int argc, char** argv) {
+    if (argc < 2) {
+        kklogf("usage: export KEY=VALUE\n");
+        return;
+    }
+    char* eq = strchr(argv[1], '=');
+    if (!eq) {
+        kklogf("usage: export KEY=VALUE\n");
+        return;
+    }
+    *eq = 0;
+    if (env_set(argv[1], eq + 1) != 0) {
+        klogf_color("export: failed to set %s\n", 0xFF0000, argv[1]);
+    }
+    *eq = '=';
+}
+
+void cmd_unset(int argc, char** argv) {
+    if (argc < 2) {
+        kklogf("usage: unset KEY\n");
+        return;
+    }
+    env_unset(argv[1]);
+}
+
+void cmd_printenv(int argc, char** argv) {
+    (void)argc;
+    (void)argv;
+    int n = env_count();
+    for (int i = 0; i < n; i++) {
+        kklogf("%s\n", env_entry(i));
     }
 }
 
@@ -1499,6 +1537,9 @@ command_t commands[] = {
     {"guidemo", cmd_guidemo},
     {"showimage", cmd_showimage},
     {"exec", cmd_exec},
+    {"export", cmd_export},
+    {"unset", cmd_unset},
+    {"printenv", cmd_printenv},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);

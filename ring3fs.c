@@ -35,6 +35,28 @@ int r3_mkdir(const char* path) {
     return (int)r3_syscall(SYS_COSFS_MKDIR, (uint32_t)path, 0, 0);
 }
 
+uint32_t r3_brk(uint32_t new_break) {
+    return r3_syscall(SYS_BRK, new_break, 0, 0);
+}
+
+void* r3_sbrk(int32_t increment) {
+    static uint32_t cached_break = 0;
+    if (cached_break == 0) {
+        cached_break = r3_brk(0);
+    }
+    if (increment == 0) {
+        return (void*)cached_break;
+    }
+    uint32_t old_break = cached_break;
+    uint32_t wanted = old_break + (uint32_t)increment;
+    uint32_t got = r3_brk(wanted);
+    if (got != wanted) {
+        return (void*)-1;
+    }
+    cached_break = got;
+    return (void*)old_break;
+}
+
 int r3_cosfs_open(const char* path, int flags) {
     return (int)r3_syscall(SYS_COSFS_OPEN, (uint32_t)path, (uint32_t)flags, 0);
 }

@@ -23,6 +23,9 @@
 #define SYS_FAT32_UNLINK 16
 #define SYS_FAT32_MKDIR  17
 
+#define SYS_BRK          18
+#define SYS_SPAWN        19
+
 uint32_t syscall_dispatch(registers_t *regs);
 
 #endif

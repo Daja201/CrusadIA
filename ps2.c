@@ -287,6 +287,7 @@ static void ps2_keyboard_byte(uint8_t b) {
 
     if (c != 0) {
         terminal_key(c);
+        stdin_feed(c);
         usb_kbd_dirty = 1;
     }
 }

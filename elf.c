@@ -5,6 +5,7 @@
 #include "pmm.h"
 #include "task.h"
 #include "string.h"
+#include "env.h"
 
 #define EI_NIDENT   16
 #define ELFMAG0     0x7F
@@ -115,7 +116,78 @@ static int load_segment(int fd, uint32_t fsize, const elf32_phdr_t* ph, int slot
     return ELF_OK;
 }
 
+#define ELF_MAX_ARGV 32
+#define ELF_MAX_ENV 16
+#define ELF_MAX_ARGV_BYTES 4096
+
+static int push_argv(int slot, char* const argv[], int argc, uint32_t* out_esp) {
+    if (argc < 0 || argc > ELF_MAX_ARGV) return -1;
+
+    int envc = env_count();
+    if (envc > ELF_MAX_ENV) envc = ELF_MAX_ENV;
+
+    uint32_t str_addrs[ELF_MAX_ARGV];
+    uint32_t env_addrs[ELF_MAX_ENV];
+    uint32_t sp = USER_STACK_TOP;
+    uint32_t used = 0;
+
+    for (int i = envc - 1; i >= 0; i--) {
+        const char* e = env_entry(i);
+        uint32_t len = (uint32_t)strlen(e) + 1;
+        used += len;
+        if (used > ELF_MAX_ARGV_BYTES) return -1;
+        sp -= len;
+        if (task_write_user_mem(slot, sp, e, len) != 0) return -1;
+        env_addrs[i] = sp;
+    }
+
+    for (int i = argc - 1; i >= 0; i--) {
+        uint32_t len = (uint32_t)strlen(argv[i]) + 1;
+        used += len;
+        if (used > ELF_MAX_ARGV_BYTES) return -1;
+        sp -= len;
+        if (task_write_user_mem(slot, sp, argv[i], len) != 0) return -1;
+        str_addrs[i] = sp;
+    }
+
+    sp &= ~(uint32_t)3;
+
+    uint32_t zero = 0;
+
+    used += 4u * ((uint32_t)envc + 1u);
+    if (used > ELF_MAX_ARGV_BYTES) return -1;
+    sp -= 4u * ((uint32_t)envc + 1u);
+    uint32_t envp_addr = sp;
+    for (int i = 0; i < envc; i++) {
+        if (task_write_user_mem(slot, envp_addr + (uint32_t)i * 4, &env_addrs[i], 4) != 0) return -1;
+    }
+    if (task_write_user_mem(slot, envp_addr + (uint32_t)envc * 4, &zero, 4) != 0) return -1;
+
+    used += 4u * ((uint32_t)argc + 1u);
+    if (used > ELF_MAX_ARGV_BYTES) return -1;
+    sp -= 4u * ((uint32_t)argc + 1u);
+    uint32_t argv_addr = sp;
+    for (int i = 0; i < argc; i++) {
+        if (task_write_user_mem(slot, argv_addr + (uint32_t)i * 4, &str_addrs[i], 4) != 0) return -1;
+    }
+    if (task_write_user_mem(slot, argv_addr + (uint32_t)argc * 4, &zero, 4) != 0) return -1;
+
+    used += 4;
+    if (used > ELF_MAX_ARGV_BYTES) return -1;
+    sp -= 4;
+    uint32_t argc_u = (uint32_t)argc;
+    if (task_write_user_mem(slot, sp, &argc_u, 4) != 0) return -1;
+
+    *out_esp = sp;
+    return 0;
+}
+
 int elf_exec(const char* path, uint32_t priority) {
+    char* const argv[1] = { (char*)path };
+    return elf_exec_argv(path, argv, 1, priority);
+}
+
+int elf_exec_argv(const char* path, char* const argv[], int argc, uint32_t priority) {
     int fd = vfs_open(path, O_RDONLY);
     if (fd < 0) return ELF_E_OPEN;
 
@@ -191,6 +263,12 @@ int elf_exec(const char* path, uint32_t priority) {
         return ELF_E_MEM;
     }
 
-    task_start_user(slot, (void (*)())entry);
+    uint32_t user_esp = 0;
+    if (push_argv(slot, argv, argc, &user_esp) != 0) {
+        task_abort_user(slot);
+        return ELF_E_MEM;
+    }
+
+    task_start_user(slot, (void (*)())entry, user_esp);
     return ELF_OK;
 }

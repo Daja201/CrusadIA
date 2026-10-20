@@ -23,6 +23,26 @@ static char cmd_history[HISTORY_SIZE][CMD_BUF_SIZE];
 static int history_count = 0;
 static int history_pos = 0;
 
+#define STDIN_RING_SIZE 256
+static char stdin_ring[STDIN_RING_SIZE];
+static int stdin_head = 0;
+static int stdin_tail = 0;
+
+void stdin_feed(char c) {
+    if (c < 0x20 && c != '\n' && c != '\t' && c != 0x08) return;
+    int next = (stdin_head + 1) % STDIN_RING_SIZE;
+    if (next == stdin_tail) return;
+    stdin_ring[stdin_head] = c;
+    stdin_head = next;
+}
+
+int stdin_getc(void) {
+    if (stdin_tail == stdin_head) return -1;
+    char c = stdin_ring[stdin_tail];
+    stdin_tail = (stdin_tail + 1) % STDIN_RING_SIZE;
+    return (int)(unsigned char)c;
+}
+
 static void screen_pos_for(int pos, int* out_x, int* out_y) {
     int cells = (int)Wwidth() / 8;
     int col0 = sac_x / 8;

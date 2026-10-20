@@ -5,7 +5,7 @@
 #include "vfs.h"
 #include "paging.h"
 
-#define TASK_STACK_SIZE 16384
+#define TASK_STACK_SIZE USER_STACK_SIZE
 #define TASK_KSTACK_SIZE 8192
 #define TASK_GUARD_SIZE 4096
 #define MAX_TASKS 32
@@ -57,6 +57,19 @@ int task_track_frames(int slot, const uint32_t* frames, int count) {
     return 0;
 }
 
+int task_untrack_frame(int slot, uint32_t frame) {
+    if (slot < 0 || slot >= num_tasks) return -1;
+    task_t *t = &tasks[slot];
+    for (int i = 0; i < t->owned_frame_count; i++) {
+        if (t->owned_frames[i] == frame) {
+            t->owned_frames[i] = t->owned_frames[t->owned_frame_count - 1];
+            t->owned_frame_count--;
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int task_map_user_page(int slot, uint32_t phys, uint32_t virt, uint32_t flags) {
     if (slot < 0 || slot >= num_tasks) return -1;
     uint32_t* dir = tasks[slot].page_directory;
@@ -76,6 +89,94 @@ uint32_t task_translate_user_ptr(int slot, uint32_t virt) {
     uint32_t* table = (uint32_t*)(dir[pd_index] & ~0xFFFu);
     if (!(table[pt_index] & 0x1)) return 0;
     return (table[pt_index] & ~0xFFFu) | (virt & 0xFFFu);
+}
+
+int task_write_user_mem(int slot, uint32_t uva, const void* data, uint32_t len) {
+    if (slot < 0 || slot >= num_tasks) return -1;
+    const uint8_t* src = (const uint8_t*)data;
+    uint32_t written = 0;
+    while (written < len) {
+        uint32_t phys = task_translate_user_ptr(slot, uva + written);
+        if (!phys) return -1;
+        uint32_t page_off = (uva + written) & 0xFFFu;
+        uint32_t chunk = 4096u - page_off;
+        if (chunk > len - written) chunk = len - written;
+        for (uint32_t i = 0; i < chunk; i++) {
+            ((uint8_t*)phys)[i] = src[written + i];
+        }
+        written += chunk;
+    }
+    return 0;
+}
+
+uint32_t task_get_heap_break(int slot) {
+    if (slot < 0 || slot >= num_tasks) return 0;
+    if (tasks[slot].heap_virt_next < USER_HEAP_BASE) return USER_HEAP_BASE;
+    return tasks[slot].heap_virt_next;
+}
+
+uint32_t task_set_heap_break(int slot, uint32_t new_break) {
+    if (slot < 0 || slot >= num_tasks) return 0;
+    task_t *t = &tasks[slot];
+    uint32_t cur = (t->heap_virt_next < USER_HEAP_BASE) ? USER_HEAP_BASE : t->heap_virt_next;
+
+    if (new_break == 0) return cur;
+    if (new_break < USER_HEAP_BASE) return cur;
+    if (new_break > USER_HEAP_MAX) return cur;
+
+    uint32_t cur_aligned = (cur + (PMM_BLOCK_SIZE - 1)) & ~(uint32_t)(PMM_BLOCK_SIZE - 1);
+    uint32_t new_aligned = (new_break + (PMM_BLOCK_SIZE - 1)) & ~(uint32_t)(PMM_BLOCK_SIZE - 1);
+
+    if (new_aligned > cur_aligned) {
+        uint32_t va = cur_aligned;
+        while (va < new_aligned) {
+            void *phys = pmm_alloc_block();
+            if (!phys) {
+                uint32_t rollback = cur_aligned;
+                while (rollback < va) {
+                    uint32_t p = task_translate_user_ptr(slot, rollback);
+                    unmap_page_dir(t->page_directory, rollback);
+                    if (p) {
+                        task_untrack_frame(slot, p);
+                        pmm_free_block((void*)p);
+                    }
+                    rollback += PMM_BLOCK_SIZE;
+                }
+                return cur;
+            }
+            uint32_t frame = (uint32_t)phys;
+            if (task_track_frames(slot, &frame, 1) != 0) {
+                pmm_free_block(phys);
+                uint32_t rollback = cur_aligned;
+                while (rollback < va) {
+                    uint32_t p = task_translate_user_ptr(slot, rollback);
+                    unmap_page_dir(t->page_directory, rollback);
+                    if (p) {
+                        task_untrack_frame(slot, p);
+                        pmm_free_block((void*)p);
+                    }
+                    rollback += PMM_BLOCK_SIZE;
+                }
+                return cur;
+            }
+            task_map_user_page(slot, frame, va, 0x07);
+            va += PMM_BLOCK_SIZE;
+        }
+    } else if (new_aligned < cur_aligned) {
+        uint32_t va = new_aligned;
+        while (va < cur_aligned) {
+            uint32_t p = task_translate_user_ptr(slot, va);
+            unmap_page_dir(t->page_directory, va);
+            if (p) {
+                task_untrack_frame(slot, p);
+                pmm_free_block((void*)p);
+            }
+            va += PMM_BLOCK_SIZE;
+        }
+    }
+
+    t->heap_virt_next = new_break;
+    return new_break;
 }
 
 void task_exit() {
@@ -223,10 +324,10 @@ void task_abort_user(int slot) {
     tasks[slot].state = TASK_DEAD;
 }
 
-void task_start_user(int slot, void (*entry_point)()) {
+void task_start_user(int slot, void (*entry_point)(), uint32_t user_esp) {
     if (slot < 0 || slot >= num_tasks) return;
 
-    uint32_t user_stack_top = USER_STACK_TOP;
+    uint32_t user_stack_top = user_esp ? user_esp : USER_STACK_TOP;
     uint32_t kernel_stack_top = tasks[slot].kernel_stack_top;
     uint32_t *kstack = (uint32_t *)kernel_stack_top;
 
@@ -250,6 +351,6 @@ void task_start_user(int slot, void (*entry_point)()) {
 int create_user_task(void (*entry_point)(), uint32_t priority) {
     int slot = task_create_user(priority);
     if (slot < 0) return -1;
-    task_start_user(slot, entry_point);
+    task_start_user(slot, entry_point, 0);
     return slot;
 }
