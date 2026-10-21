@@ -25,6 +25,7 @@
 
 #define SYS_BRK          18
 #define SYS_SPAWN        19
+#define SYS_GETTIME      20
 
 uint32_t syscall_dispatch(registers_t *regs);
 

@@ -51,6 +51,10 @@ void _exit(int code) {
     for (;;) { }
 }
 
+void yield(void) {
+    _syscall(SYS_YIELD, 0, 0, 0);
+}
+
 int spawn(const char* path, char* const argv[], int argc) {
     int r = (int)_syscall(SYS_SPAWN, (unsigned int)path, (unsigned int)argv, (unsigned int)argc);
     return r;

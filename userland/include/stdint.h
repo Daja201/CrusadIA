@@ -12,4 +12,40 @@ typedef unsigned long long uint64_t;
 typedef int32_t intptr_t;
 typedef uint32_t uintptr_t;
 
+typedef int8_t   int_least8_t;
+typedef uint8_t  uint_least8_t;
+typedef int16_t  int_least16_t;
+typedef uint16_t uint_least16_t;
+typedef int32_t  int_least32_t;
+typedef uint32_t uint_least32_t;
+typedef int64_t  int_least64_t;
+typedef uint64_t uint_least64_t;
+
+typedef int32_t  intmax_t;
+typedef uint32_t uintmax_t;
+
+#define INT8_MIN   (-128)
+#define INT8_MAX   127
+#define UINT8_MAX  0xff
+#define INT16_MIN  (-32768)
+#define INT16_MAX  32767
+#define UINT16_MAX 0xffff
+#define INT32_MIN  (-2147483647-1)
+#define INT32_MAX  2147483647
+#define UINT32_MAX 0xffffffffU
+#define INT64_MIN  (-9223372036854775807LL-1)
+#define INT64_MAX  9223372036854775807LL
+#define UINT64_MAX 0xffffffffffffffffULL
+
+#define SIZE_MAX   UINT32_MAX
+
+#define INT8_C(x)   (x)
+#define UINT8_C(x)  (x##U)
+#define INT16_C(x)  (x)
+#define UINT16_C(x) (x##U)
+#define INT32_C(x)  (x)
+#define UINT32_C(x) (x##U)
+#define INT64_C(x)  (x##LL)
+#define UINT64_C(x) (x##ULL)
+
 #endif

@@ -4,6 +4,25 @@
 #include "vfs.h"
 #include "elf.h"
 #include "string.h"
+#include "rtc.h"
+
+static uint32_t rtc_to_epoch(void) {
+    int year, month, day, hour, min, sec;
+    rtc_get_datetime(&year, &month, &day, &hour, &min, &sec);
+    if (year < 100) year += 2000;
+    int32_t y = year;
+    int32_t m = month;
+    int32_t d = day;
+    y -= m <= 2;
+    int32_t era = (y >= 0 ? y : y - 399) / 400;
+    uint32_t yoe = (uint32_t)(y - era * 400);
+    uint32_t doy = (153u * (uint32_t)(m + (m > 2 ? -3 : 9)) + 2u) / 5u + (uint32_t)d - 1u;
+    uint32_t doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+    int64_t days = (int64_t)era * 146097 + (int64_t)doe - 719468;
+    int64_t epoch = days * 86400 + hour * 3600 + min * 60 + sec;
+    if (epoch < 0) epoch = 0;
+    return (uint32_t)epoch;
+}
 
 extern int current_task;
 extern int open(const char *path, int flags, ...);
@@ -61,6 +80,9 @@ uint32_t syscall_dispatch(registers_t *regs) {
             int r = elf_exec_argv(path_buf, argv_k, argc, 1);
             return r == ELF_OK ? 0 : (uint32_t)-1;
         }
+
+        case SYS_GETTIME:
+            return rtc_to_epoch();
 
         case SYS_COSFS_OPEN:
         case SYS_FAT32_OPEN: {

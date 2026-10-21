@@ -39,6 +39,7 @@ void cmd_exec(int argc, char** argv);
 void cmd_export(int argc, char** argv);
 void cmd_unset(int argc, char** argv);
 void cmd_printenv(int argc, char** argv);
+void cmd_sqlite(int argc, char** argv);
 extern uint32_t pci_config_read(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset);
 extern void pci_config_write(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset, uint32_t value);
 
@@ -1283,6 +1284,10 @@ void cmd_open(int argc, char** argv) {
         else if (strcmp(dot, ".elf") == 0) {
             cmd_exec(argc, argv);
         }
+        else if (strcmp(dot, ".db") == 0 || strcmp(dot, ".sqlite") == 0 ||
+                 strcmp(dot, ".sqlite3") == 0) {
+            cmd_sqlite(argc, argv);
+        }
         else {
             klog_status("UNKNOWN EXTENSION", 0xFF0000);
         }
@@ -1299,6 +1304,13 @@ void cmd_exec(int argc, char** argv) {
     int r = elf_exec_argv(argv[1], &argv[1], argc - 1, 1);
     if (r != ELF_OK) {
         klogf_color("exec: %s: %s\n", 0xFF0000, argv[1], elf_strerror(r));
+    }
+}
+
+void cmd_sqlite(int argc, char** argv) {
+    int r = elf_exec_argv("/sqlite.elf", argv, argc, 1);
+    if (r != ELF_OK) {
+        klogf_color("sqlite: %s\n", 0xFF0000, elf_strerror(r));
     }
 }
 
@@ -1540,6 +1552,7 @@ command_t commands[] = {
     {"export", cmd_export},
     {"unset", cmd_unset},
     {"printenv", cmd_printenv},
+    {"sqlite", cmd_sqlite},
 };
 
 int command_count = sizeof(commands)/sizeof(command_t);

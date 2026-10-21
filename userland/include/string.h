@@ -21,5 +21,8 @@ char* strrchr(const char* s, int c);
 char* strstr(const char* haystack, const char* needle);
 char* strdup(const char* s);
 char* strtok(char* str, const char* delim);
+size_t strspn(const char* s, const char* accept);
+size_t strcspn(const char* s, const char* reject);
+char* strpbrk(const char* s, const char* accept);
 
 #endif

@@ -39,6 +39,29 @@ static void emit_int(sink_t* s, long v) {
     }
 }
 
+static void emit_uint64(sink_t* s, unsigned long long v, int base, int upper) {
+    char tmp[64];
+    int n = 0;
+    const char* digits = upper ? "0123456789ABCDEF" : "0123456789abcdef";
+
+    if (v == 0) { emit(s, '0'); return; }
+
+    while (v) {
+        tmp[n++] = digits[v % (unsigned)base];
+        v /= (unsigned)base;
+    }
+    while (n > 0) emit(s, tmp[--n]);
+}
+
+static void emit_int64(sink_t* s, long long v) {
+    if (v < 0) {
+        emit(s, '-');
+        emit_uint64(s, (unsigned long long)(-v), 10, 0);
+    } else {
+        emit_uint64(s, (unsigned long long)v, 10, 0);
+    }
+}
+
 int vsnprintf(char* buf, size_t size, const char* fmt, va_list args) {
     sink_t s = { buf, size, 0 };
 
@@ -52,18 +75,22 @@ int vsnprintf(char* buf, size_t size, const char* fmt, va_list args) {
         switch (*p) {
             case 'd':
             case 'i':
-                if (longflag) emit_int(&s, va_arg(args, long));
+                if (longflag >= 2) emit_int64(&s, va_arg(args, long long));
+                else if (longflag == 1) emit_int(&s, va_arg(args, long));
                 else emit_int(&s, va_arg(args, int));
                 break;
             case 'u':
-                if (longflag) emit_uint(&s, va_arg(args, unsigned long), 10, 0);
+                if (longflag >= 2) emit_uint64(&s, va_arg(args, unsigned long long), 10, 0);
+                else if (longflag == 1) emit_uint(&s, va_arg(args, unsigned long), 10, 0);
                 else emit_uint(&s, va_arg(args, unsigned int), 10, 0);
                 break;
             case 'x':
-                emit_uint(&s, va_arg(args, unsigned int), 16, 0);
+                if (longflag >= 2) emit_uint64(&s, va_arg(args, unsigned long long), 16, 0);
+                else emit_uint(&s, va_arg(args, unsigned int), 16, 0);
                 break;
             case 'X':
-                emit_uint(&s, va_arg(args, unsigned int), 16, 1);
+                if (longflag >= 2) emit_uint64(&s, va_arg(args, unsigned long long), 16, 1);
+                else emit_uint(&s, va_arg(args, unsigned int), 16, 1);
                 break;
             case 'p':
                 emit_str(&s, "0x");

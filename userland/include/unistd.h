@@ -20,6 +20,7 @@ int mkdir(const char* path);
 void* sbrk(int increment);
 void _exit(int code);
 int spawn(const char* path, char* const argv[], int argc);
+void yield(void);
 
 extern char** environ;
 void __init_environ(char** envp);

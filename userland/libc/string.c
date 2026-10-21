@@ -133,6 +133,26 @@ char* strdup(const char* s) {
     return out;
 }
 
+size_t strspn(const char* s, const char* accept) {
+    size_t n = 0;
+    while (s[n] && strchr(accept, s[n])) n++;
+    return n;
+}
+
+size_t strcspn(const char* s, const char* reject) {
+    size_t n = 0;
+    while (s[n] && !strchr(reject, s[n])) n++;
+    return n;
+}
+
+char* strpbrk(const char* s, const char* accept) {
+    while (*s) {
+        if (strchr(accept, *s)) return (char*)s;
+        s++;
+    }
+    return NULL;
+}
+
 static char* g_tok_save = NULL;
 
 char* strtok(char* str, const char* delim) {
